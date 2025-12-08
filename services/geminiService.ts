@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { ReceiptData, ActionItem, InboxAnalysisResult, CalendarEvent, IntegrationAccount, BankTransaction, ReconciliationSuggestion, TimesheetEntry, ContractData } from "../types";
+import JSZip from 'jszip';
 
 // Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -43,21 +44,6 @@ We need to finalize the hiring plan for engineering.`
 Subject: eTicket Itinerary: SFO to NYC
 Body: Flight UA421. Depart SFO Oct 28 08:00 AM. Arrive JFK 04:30 PM.
 Seat 4A. Confirmation: K9J2L.`
-  }
-];
-
-const MOCK_DRIVE_FILES = [
-  {
-    folderId: 'drive_main',
-    name: 'AWS_Invoice_Sept_2024.pdf',
-    url: 'https://drive.google.com/file/d/aws-invoice-123',
-    content: `Amazon Web Services Invoice. Date: 2024-09-30. Total: 1250.00 SEK. VAT (25%): 250.00 SEK. Service: EC2 Compute Instances.`
-  },
-  {
-    folderId: 'drive_main',
-    name: 'Uber_Receipt_Stockholm.jpg',
-    url: 'https://drive.google.com/file/d/uber-receipt-456',
-    content: `Uber Ride. Date: 2024-10-01. Total: 249.00 SEK. VAT: 14.09 SEK. Trip to Arlanda Airport.`
   }
 ];
 
@@ -296,48 +282,6 @@ Location: Video Call`);
   return allEmails;
 };
 
-export const analyzeDriveFiles = async (files: {content: string, url: string, name: string}[]): Promise<ReceiptData[]> => {
-    if (files.length === 0) return [];
-
-    try {
-        const prompt = `Analyze these files from Google Drive for Swedish Accounting Standards. 
-        Extract Date, Vendor, Total Amount, Currency, and VAT Amount.
-        Create a formal "Description" for the general ledger.
-        Also generate relevant #tags.
-
-        FILES:
-        ${files.map(f => `--- FILE: ${f.name} ---\n${f.content}`).join('\n')}
-        `;
-
-        const response = await ai.models.generateContent({
-            model: RECEIPT_MODEL,
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.ARRAY,
-                    items: receiptSchema
-                },
-                temperature: 0.1
-            }
-        });
-
-        const parsed = safeJSONParse(response.text || "[]");
-        
-        return parsed.map((r: any, index: number) => ({
-            ...r,
-            id: crypto.randomUUID(),
-            source: 'GDrive',
-            sourceUrl: files[index]?.url || '',
-            imageUrl: null
-        }));
-
-    } catch (error) {
-        console.error("Drive Analysis Error:", error);
-        throw new Error("Failed to analyze drive files.");
-    }
-}
-
 export const analyzeInbox = async (emailBodies: string[]): Promise<InboxAnalysisResult> => {
   if (emailBodies.length === 0) {
       return { receipts: [], tasks: [], events: [] };
@@ -381,7 +325,7 @@ export const analyzeInbox = async (emailBodies: string[]): Promise<InboxAnalysis
   }
 };
 
-export const analyzeReceipt = async (base64Data: string, mimeType: string): Promise<ReceiptData> => {
+export const analyzeReceipt = async (base64Data: string, mimeType: string, filename?: string): Promise<ReceiptData> => {
   try {
     const response = await ai.models.generateContent({
       model: RECEIPT_MODEL,
@@ -411,12 +355,90 @@ export const analyzeReceipt = async (base64Data: string, mimeType: string): Prom
       id: crypto.randomUUID(),
       imageUrl: mimeType.startsWith('image/') ? `data:${mimeType};base64,${base64Data}` : undefined,
       source: 'Upload',
+      sourceUrl: filename || 'Upload',
       currency: data.currency || 'USD'
     };
   } catch (error) {
     console.error("Receipt Analysis Error:", error);
-    throw new Error("Failed to analyze receipt.");
+    throw new Error(`Failed to analyze receipt: ${filename}`);
   }
+};
+
+export const analyzeReceiptBatch = async (files: File[], onProgress?: (completed: number, total: number) => void): Promise<ReceiptData[]> => {
+    const results: ReceiptData[] = [];
+    let completed = 0;
+
+    // Process in batches of 3 to avoid rate limits if any, though standard Gemini is robust.
+    // For "in one go" feeling, we parallelize.
+    const promises = files.map(async (file) => {
+        try {
+            const buffer = await file.arrayBuffer();
+            const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+            const result = await analyzeReceipt(base64, file.type, file.name);
+            completed++;
+            if (onProgress) onProgress(completed, files.length);
+            return result;
+        } catch (e) {
+            console.error(`Failed to process ${file.name}`, e);
+            completed++;
+            if (onProgress) onProgress(completed, files.length);
+            return null;
+        }
+    });
+
+    const analyzed = await Promise.all(promises);
+    return analyzed.filter(r => r !== null) as ReceiptData[];
+};
+
+export const extractReceiptsFromZip = async (zipBuffer: ArrayBuffer, zipName: string, onProgress?: (completed: number, total: number) => void): Promise<ReceiptData[]> => {
+    try {
+        const zip = await JSZip.loadAsync(zipBuffer);
+        const imageFiles: {name: string, data: string, type: string}[] = [];
+
+        // 1. Extract valid files from Zip
+        for (const filename of Object.keys(zip.files)) {
+            const file = zip.files[filename];
+            if (file.dir) continue;
+            
+            const lowerName = filename.toLowerCase();
+            if (lowerName.match(/\.(jpg|jpeg|png|webp|pdf)$/)) {
+                const base64 = await file.async('base64');
+                let type = 'application/octet-stream';
+                if (lowerName.endsWith('pdf')) type = 'application/pdf';
+                else if (lowerName.endsWith('png')) type = 'image/png';
+                else if (lowerName.endsWith('webp')) type = 'image/webp';
+                else type = 'image/jpeg';
+
+                imageFiles.push({ name: filename, data: base64, type });
+            }
+        }
+
+        // 2. Process extracted files
+        const results: ReceiptData[] = [];
+        let completed = 0;
+        
+        const promises = imageFiles.map(async (file) => {
+            try {
+                // Pass full zip path context e.g. "MyReceipts.zip/lunch.jpg"
+                const result = await analyzeReceipt(file.data, file.type, `${zipName}/${file.name}`);
+                completed++;
+                if (onProgress) onProgress(completed, imageFiles.length);
+                return result;
+            } catch (e) {
+                console.error(`Failed to analyze zip entry: ${file.name}`, e);
+                completed++;
+                if (onProgress) onProgress(completed, imageFiles.length);
+                return null;
+            }
+        });
+
+        const analyzed = await Promise.all(promises);
+        return analyzed.filter(r => r !== null) as ReceiptData[];
+
+    } catch (e) {
+        console.error("Zip Extraction Error", e);
+        throw new Error("Failed to process Zip file");
+    }
 };
 
 export const extractActionItems = async (textLogs: string): Promise<ActionItem[]> => {

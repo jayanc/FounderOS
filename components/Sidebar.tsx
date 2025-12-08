@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { ViewState, User } from '../types';
-import { LayoutDashboard, Receipt, MessageSquareMore, BrainCircuit, Settings, LogOut, Clock, FileText, Camera } from 'lucide-react';
+import { LayoutDashboard, Receipt, MessageSquareMore, BrainCircuit, Settings, LogOut, Clock, FileText, Camera, TrendingUp } from 'lucide-react';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -15,6 +15,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
   const navItems = [
     { id: ViewState.DASHBOARD, label: 'Briefing', icon: LayoutDashboard },
     { id: ViewState.FINANCE, label: 'Finance', icon: Receipt },
+    { id: ViewState.PLANNING, label: 'Growth Plan', icon: TrendingUp },
     { id: ViewState.OPS, label: 'Workflow', icon: MessageSquareMore },
     { id: ViewState.TIMESHEETS, label: 'Timesheets', icon: Clock },
     { id: ViewState.CONTRACTS, label: 'Contracts', icon: FileText },

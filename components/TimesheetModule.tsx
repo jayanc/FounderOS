@@ -3,7 +3,7 @@ import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { TimesheetEntry, ViewState } from '../types';
 import { parseTimesheet, queryTimesheetData } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-import { Upload, FileSpreadsheet, Download, Search, Loader2, Save, Trash2, Clock, CalendarDays, Plus, BarChart3, User, Folder, Layers, Pencil, Check, X, History, FileJson, Filter, Replace, ArrowRight, AlertTriangle, FileWarning, ArrowUpDown, Sparkles, MoreHorizontal, Eraser, CheckSquare, Square } from 'lucide-react';
+import { Upload, FileSpreadsheet, Download, Search, Loader2, Save, Trash2, Clock, CalendarDays, Plus, BarChart3, User, Folder, Layers, Pencil, Check, X, History, FileJson, Filter, Replace, ArrowRight, AlertTriangle, FileWarning, ArrowUpDown, Sparkles, MoreHorizontal, Eraser, CheckSquare, Square, Camera } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, AreaChart, Area, PieChart, Pie, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
 
@@ -14,7 +14,11 @@ const formatDate = (dateStr: string) => {
     } catch { return dateStr; }
 };
 
-export const TimesheetModule: React.FC = () => {
+interface TimesheetModuleProps {
+    onOpenCapture?: () => void;
+}
+
+export const TimesheetModule: React.FC<TimesheetModuleProps> = ({ onOpenCapture }) => {
     // --- Data State ---
     const [entries, setEntries] = useState<TimesheetEntry[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -333,6 +337,12 @@ export const TimesheetModule: React.FC = () => {
                         <Layers className="w-4 h-4" /> Manage Imports
                     </button>
                     
+                    {onOpenCapture && (
+                        <button onClick={onOpenCapture} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/30 transition-colors bg-zinc-900" title="Capture Snapshot">
+                            <Camera className="w-5 h-5" />
+                        </button>
+                    )}
+
                     <button onClick={() => fileInputRef.current?.click()} disabled={isParsing} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition-all">
                         {isParsing ? <Loader2 className="w-4 h-4 animate-spin"/> : <Upload className="w-4 h-4" />}
                         Import Data

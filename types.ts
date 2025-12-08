@@ -5,6 +5,7 @@ export enum ViewState {
   OPS = 'OPS',
   TIMESHEETS = 'TIMESHEETS',
   CONTRACTS = 'CONTRACTS',
+  PLANNING = 'PLANNING',
   SETTINGS = 'SETTINGS'
 }
 
@@ -126,6 +127,17 @@ export interface ContractData {
   imageUrl?: string; // For preview if it's an image
   uploadDate: string;
   status?: 'Review' | 'Validated';
+}
+
+export interface GrowthPlan {
+    id: string;
+    name: string;
+    startingCash: number;
+    currentRevenue: number;
+    growthRate: number; // MoM %
+    monthlyBurn: number;
+    hiringBudget: number; // Monthly addition
+    createdAt: string;
 }
 
 export interface Briefing {

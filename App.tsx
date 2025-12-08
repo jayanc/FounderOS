@@ -14,6 +14,7 @@ const OpsModule = React.lazy(() => import('./components/OpsModule').then(module 
 const ConnectAccounts = React.lazy(() => import('./components/ConnectAccounts').then(module => ({ default: module.ConnectAccounts })));
 const TimesheetModule = React.lazy(() => import('./components/TimesheetModule').then(module => ({ default: module.TimesheetModule })));
 const ContractModule = React.lazy(() => import('./components/ContractModule').then(module => ({ default: module.ContractModule })));
+const PlanningModule = React.lazy(() => import('./components/PlanningModule').then(module => ({ default: module.PlanningModule })));
 
 const STORAGE_KEYS = {
     USER: 'founder_os_user',
@@ -140,6 +141,8 @@ const App: React.FC = () => {
   const handleToggleAccount = (id: string) => setAccounts(prev => prev.map(a => a.id === id ? { ...a, isConnected: !a.isConnected } : a));
   const handleAddAccount = (account: IntegrationAccount) => setAccounts(prev => [...prev, account]);
 
+  const openCapture = () => setIsCaptureOpen(true);
+
   if (!user) {
       return <Auth onLogin={handleLogin} />;
   }
@@ -149,7 +152,7 @@ const App: React.FC = () => {
       case ViewState.DASHBOARD:
         return <Dashboard receipts={receipts} tasks={tasks} user={user} onNavigate={setCurrentView} />;
       case ViewState.FINANCE:
-        return <FinanceModule receipts={receipts} onAddReceipt={handleAddReceipt} onRemoveReceipt={handleRemoveReceipt} accounts={accounts} />;
+        return <FinanceModule receipts={receipts} onAddReceipt={handleAddReceipt} onRemoveReceipt={handleRemoveReceipt} accounts={accounts} onOpenCapture={openCapture} />;
       case ViewState.OPS:
         return (
           <OpsModule 
@@ -163,9 +166,11 @@ const App: React.FC = () => {
           />
         );
       case ViewState.TIMESHEETS:
-        return <TimesheetModule />;
+        return <TimesheetModule onOpenCapture={openCapture} />;
       case ViewState.CONTRACTS:
-        return <ContractModule />;
+        return <ContractModule onOpenCapture={openCapture} />;
+      case ViewState.PLANNING:
+        return <PlanningModule onOpenCapture={openCapture} />;
       case ViewState.SETTINGS:
         return (
             <ConnectAccounts 
@@ -194,7 +199,7 @@ const App: React.FC = () => {
         onNavigate={setCurrentView} 
         user={user} 
         onLogout={handleLogout} 
-        onOpenCapture={() => setIsCaptureOpen(true)}
+        onOpenCapture={openCapture}
       />
       
       <main className="flex-1 p-6 lg:p-10 h-full overflow-y-auto overflow-x-hidden relative z-10 scroll-smooth">

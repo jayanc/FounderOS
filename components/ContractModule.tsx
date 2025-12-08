@@ -3,9 +3,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ContractData, ContractCategory, ViewState } from '../types';
 import { analyzeContract, queryContractData } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-import { Upload, FileText, Search, Loader2, Calendar, Users, AlertTriangle, MessageSquare, Briefcase, User, Building2, Globe, Eye, X, ZoomIn, CheckCircle2, History, Pencil, Save } from 'lucide-react';
+import { Upload, FileText, Search, Loader2, Calendar, Users, AlertTriangle, MessageSquare, Briefcase, User, Building2, Globe, Eye, X, ZoomIn, CheckCircle2, History, Pencil, Save, Camera } from 'lucide-react';
 
-export const ContractModule: React.FC = () => {
+interface ContractModuleProps {
+    onOpenCapture?: () => void;
+}
+
+export const ContractModule: React.FC<ContractModuleProps> = ({ onOpenCapture }) => {
     const [contracts, setContracts] = useState<ContractData[]>([]);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [uploadCategory, setUploadCategory] = useState<ContractCategory>('Customer');
@@ -133,6 +137,11 @@ export const ContractModule: React.FC = () => {
                          <option value="Consultant">Consultant</option>
                          <option value="Partner">Partner</option>
                      </select>
+                    {onOpenCapture && (
+                        <button onClick={onOpenCapture} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/30 transition-colors bg-zinc-900" title="Capture Snapshot">
+                            <Camera className="w-5 h-5" />
+                        </button>
+                    )}
                     <button onClick={() => fileInputRef.current?.click()} disabled={isAnalyzing} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition-all">
                         {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin"/> : <Upload className="w-4 h-4" />}
                         Upload Contract

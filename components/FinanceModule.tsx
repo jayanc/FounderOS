@@ -1,9 +1,9 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { ReceiptData, IntegrationAccount, BankTransaction, ReconciliationSuggestion, ViewState } from '../types';
-import { analyzeReceipt, parseBankStatement, suggestMatches } from '../services/geminiService';
+import { analyzeReceipt, parseBankStatement, suggestMatches, extractReceiptsFromZip, analyzeReceiptBatch } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square } from 'lucide-react';
+import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square, FileArchive } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend } from 'recharts';
 import JSZip from 'jszip';
 
@@ -34,6 +34,7 @@ interface FinanceModuleProps {
   onAddReceipt: (receipt: ReceiptData) => void;
   onRemoveReceipt?: (id: string) => void;
   accounts: IntegrationAccount[];
+  onOpenCapture: () => void;
 }
 
 interface ColumnConfig {
@@ -51,13 +52,12 @@ const VAT_RATES = [
     { label: '0%', value: 0 }
 ];
 
-export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddReceipt, onRemoveReceipt, accounts }) => {
+export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddReceipt, onRemoveReceipt, accounts, onOpenCapture }) => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'ledger' | 'reconciliation'>('ledger');
   
   // Ledger
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isBulkMode, setIsBulkMode] = useState(false); // Bulk Mode State
   const [batchProgress, setBatchProgress] = useState<{current: number, total: number} | null>(null); // Progress State
   const [statusText, setStatusText] = useState("Analyzing...");
   const [preview, setPreview] = useState<string | null>(null);
@@ -164,7 +164,6 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   }, [bankTransactions, receipts.length]);
 
   const unifiedReportData = useMemo(() => {
-      // (Similar to previous implementation, keeping existing logic)
       const reportData: any[] = [];
       const matchedReceiptIds = new Set<string>();
 
@@ -248,12 +247,6 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   const handleSearchReplace = () => {
       if (!findText) return;
       let count = 0;
-      // We need to modify receipts and call onAddReceipt (which implies we need a way to bulk update in parent or clear and re-add)
-      // Since props are immutable here and onAddReceipt is single, we might need a bulk update approach.
-      // For this demo, we will map and replace, then we really need an update function. 
-      // Assumption: The parent App.tsx needs a bulk update method or we handle this locally if it was fully managed here.
-      // WORKAROUND: Remove matching IDs and re-add updated ones.
-      
       const updatedReceipts: ReceiptData[] = [];
       const idsToRemove: string[] = [];
 
@@ -268,7 +261,6 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       });
 
       if (count > 0) {
-          // This is a bit inefficient due to singular update pattern in App.tsx but works for the architecture
           idsToRemove.forEach(id => onRemoveReceipt && onRemoveReceipt(id));
           updatedReceipts.forEach(r => onAddReceipt(r));
           alert(`Replaced ${count} occurrences.`);
@@ -279,6 +271,77 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!e.target.files || e.target.files.length === 0) return;
+      
+      const files: File[] = Array.from(e.target.files);
+      setIsAnalyzing(true);
+      setStatusText("Initializing batch...");
+      setBatchProgress({ current: 0, total: files.length }); // Initial estimation, might change if zip expands
+
+      try {
+          const newReceipts: ReceiptData[] = [];
+
+          // 1. Handle Zip Files
+          const zips = files.filter(f => f.name.endsWith('.zip'));
+          for (const zip of zips) {
+              setStatusText(`Unpacking ${zip.name}...`);
+              const buffer = await zip.arrayBuffer();
+              
+              // Helper to update progress from inside the zip processor
+              const zipProgress = (done: number, total: number) => {
+                  setBatchProgress({ current: done, total });
+                  setStatusText(`Extracting from Zip: ${done}/${total}`);
+              };
+
+              const extracted = await extractReceiptsFromZip(buffer, zip.name, zipProgress);
+              newReceipts.push(...extracted);
+          }
+
+          // 2. Handle Regular Files (Images/PDFs)
+          const regulars = files.filter(f => !f.name.endsWith('.zip'));
+          
+          if (regulars.length > 0) {
+               setStatusText(`Analyzing ${regulars.length} documents...`);
+               // Adjust total for progress bar (Zip items + Regular items)
+               // Simple logic: Reset progress for the batch of regulars
+               setBatchProgress({ current: 0, total: regulars.length });
+               
+               const batchProgressHandler = (done: number, total: number) => {
+                   setBatchProgress({ current: done, total });
+                   setStatusText(`Analyzing: ${done}/${total}`);
+               };
+
+               const batchResults = await analyzeReceiptBatch(regulars, batchProgressHandler);
+               newReceipts.push(...batchResults);
+          }
+
+          // 3. Workflow Decision
+          if (files.length === 1 && !files[0].name.endsWith('.zip') && newReceipts.length === 1) {
+              // Single File -> Review Modal
+              setAnalyzedData(newReceipts[0]);
+              // Also populate preview for the single file
+              const file = files[0];
+              const reader = new FileReader();
+              reader.onload = (e) => setPreview(e.target?.result as string);
+              reader.readAsDataURL(file);
+          } else {
+              // Bulk / Zip -> Auto Add
+              newReceipts.forEach(r => onAddReceipt(r));
+              setStatusText("Done!");
+              await new Promise(r => setTimeout(r, 800)); // Show done briefly
+          }
+          
+      } catch (e) {
+          console.error(e);
+          alert("Error processing files. Please ensure they are valid images, PDFs, or Zip archives.");
+      } finally {
+          setIsAnalyzing(false);
+          setBatchProgress(null);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+  };
+
   // --- RECONCILIATION LOGIC ---
 
   const findProgrammaticMatches = () => {
@@ -286,20 +349,16 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       setBankTransactions(prev => prev.map(tx => {
           if (tx.matchedReceiptId) return tx; // Already matched
           
-          // Look for match in receipts
           const match = receipts.find(r => {
                // 1. Exact Amount (within small float variance)
                const amtMatch = Math.abs(Math.abs(tx.amount) - r.amount) < 0.05;
-               
                // 2. Date within 3 days
                const d1 = new Date(tx.date);
                const d2 = new Date(r.date);
                const dayDiff = Math.abs((d1.getTime() - d2.getTime()) / (1000 * 3600 * 24));
                const dateMatch = dayDiff <= 3;
-               
-               // 3. Not already matched to another
+               // 3. Not already matched
                const alreadyMatched = prev.some(t => t.matchedReceiptId === r.id);
-               
                return amtMatch && dateMatch && !alreadyMatched;
           });
 
@@ -321,19 +380,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   const handleMagicMatch = async () => {
       setIsMagicMatching(true);
       try {
-          // 1. Run Programmatic Exact Match First
           const exactCount = findProgrammaticMatches();
-          
-          // 2. Run AI Match on remainder
-          const remainingTx = bankTransactions.filter(t => !t.matchedReceiptId); // Get fresh state state would need ref/effect, but here we can't easily. 
-          // Re-filter based on the state update in step 1 is tricky in same closure.
-          // For simplicity, we pause briefly or just let the user run AI after exact.
-          // Let's assume we run suggestions on current state (which might be stale if we just setBankTransactions).
-          // Better UX: Separate buttons or chained via useEffect. 
-          // Implementing separate steps for clarity.
-          
-          const suggestions = await suggestMatches(bankTransactions.filter(t => !t.matchedReceiptId), receipts); // This uses stale state if findingExact same render cycle.
-          // Ideally: wait for render. Workaround:
+          const suggestions = await suggestMatches(bankTransactions.filter(t => !t.matchedReceiptId), receipts);
           
           if (suggestions.length > 0) {
               setMatchSuggestions(suggestions);
@@ -354,7 +402,6 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
           alert("Please select exactly one bank transaction and one receipt to link.");
           return;
       }
-      
       const txId = Array.from(checkedTxIds)[0];
       const rcptId = Array.from(checkedRcptIds)[0];
 
@@ -363,7 +410,6 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
           ? { ...t, matchedReceiptId: rcptId, status: 'Reconciled', matchType: 'Manual', aiSuggestion: 'Manually Linked via Checkbox' }
           : t
       ));
-
       setCheckedTxIds(new Set());
       setCheckedRcptIds(new Set());
   };
@@ -416,9 +462,14 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
             <h2 className="text-3xl font-bold text-white tracking-tight">Financial Vision</h2>
             <p className="text-zinc-400 mt-2 font-light">Ledger management and intelligent bank reconciliation.</p>
         </div>
-        <div className="flex bg-zinc-900/50 p-1 rounded-xl border border-white/10 backdrop-blur-sm mt-4 md:mt-0">
-            <button onClick={() => setActiveTab('ledger')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all duration-300 ${activeTab === 'ledger' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Ledger</button>
-            <button onClick={() => setActiveTab('reconciliation')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all duration-300 flex items-center gap-2 ${activeTab === 'reconciliation' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300'}`}><Scale className="w-4 h-4" /> Reconciliation</button>
+        <div className="flex gap-4 items-center">
+            <button onClick={onOpenCapture} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/30 transition-colors bg-zinc-900" title="Capture Snapshot">
+                <Camera className="w-5 h-5" />
+            </button>
+            <div className="flex bg-zinc-900/50 p-1 rounded-xl border border-white/10 backdrop-blur-sm mt-4 md:mt-0">
+                <button onClick={() => setActiveTab('ledger')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all duration-300 ${activeTab === 'ledger' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Ledger</button>
+                <button onClick={() => setActiveTab('reconciliation')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all duration-300 flex items-center gap-2 ${activeTab === 'reconciliation' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300'}`}><Scale className="w-4 h-4" /> Reconciliation</button>
+            </div>
         </div>
       </header>
 
@@ -451,53 +502,55 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
 
       {activeTab === 'ledger' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* ... (Existing Upload/Edit Logic remains same, omitting for brevity to fit 4k tokens but in real file it stays) ... */}
+            {/* Upload Area */}
             <div className="lg:col-span-4 bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl p-6 flex flex-col gap-6 shadow-2xl h-fit">
-                 {/* Re-implementing simplified upload area to ensure file correctness */}
                  <div onClick={() => !isAnalyzing && fileInputRef.current?.click()} className="group border-2 border-dashed border-zinc-700/50 hover:border-indigo-500/50 rounded-2xl h-48 flex flex-col items-center justify-center cursor-pointer bg-black/20 hover:bg-black/40 transition-all duration-300 relative overflow-hidden">
-                    {preview && <img src={preview} alt="preview" className="absolute inset-0 w-full h-full object-cover opacity-20 group-hover:opacity-10 transition-opacity blur-sm" />}
+                    {preview && !isAnalyzing && <img src={preview} alt="preview" className="absolute inset-0 w-full h-full object-cover opacity-20 group-hover:opacity-10 transition-opacity blur-sm" />}
                     {isAnalyzing ? (
-                         <div className="relative z-10 flex flex-col items-center gap-3">
+                         <div className="relative z-10 flex flex-col items-center gap-3 w-full px-8">
                             <Loader2 className="w-10 h-10 animate-spin text-indigo-500" />
-                            <span className="text-zinc-300 text-sm font-medium tracking-wide">{statusText}</span>
+                            <span className="text-zinc-300 text-sm font-medium tracking-wide text-center">{statusText}</span>
+                            {batchProgress && (
+                                <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden mt-1">
+                                    <div 
+                                        className="h-full bg-indigo-500 transition-all duration-300" 
+                                        style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                                    />
+                                </div>
+                            )}
                          </div>
                     ) : (
                         <div className="relative z-10 flex flex-col items-center gap-2 group-hover:-translate-y-1 transition-transform duration-300">
-                            <Upload className="text-zinc-400 group-hover:text-indigo-400 w-6 h-6" />
-                            <span className="text-zinc-300 font-medium">Drop Receipts Here</span>
+                            <div className="flex gap-2">
+                                <Upload className="text-zinc-400 group-hover:text-indigo-400 w-6 h-6" />
+                                <FileArchive className="text-zinc-500 group-hover:text-indigo-400 w-6 h-6 opacity-50" />
+                            </div>
+                            <span className="text-zinc-300 font-medium">Drop Receipts or Zip</span>
+                            <span className="text-[10px] text-zinc-500">Supports Bulk Upload</span>
                         </div>
                     )}
-                    <input type="file" ref={fileInputRef} className="hidden" multiple accept=".jpg,.jpeg,.png,.pdf,.zip" onChange={(e) => {
-                        // Simplified handler for brevity, assuming existing logic from previous prompt is retained or re-inserted here if complete rewrite needed.
-                        // For the purpose of "Modify", I will assume context is preserved unless I overwrite it.
-                        // I will assume previous handler logic exists.
-                        const file = e.target.files?.[0];
-                        if(file) {
-                             setIsAnalyzing(true);
-                             const reader = new FileReader();
-                             reader.onloadend = async () => {
-                                 setPreview(reader.result as string);
-                                 try {
-                                     const result = await analyzeReceipt((reader.result as string).split(',')[1], file.type);
-                                     setAnalyzedData(result);
-                                 } finally { setIsAnalyzing(false); }
-                             };
-                             reader.readAsDataURL(file);
-                        }
-                    }} />
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        multiple 
+                        accept=".jpg,.jpeg,.png,.pdf,.zip,.webp" 
+                        onChange={handleFileUpload} 
+                    />
                 </div>
-                {/* Edit Form */}
+                {/* Single Edit Form (Only shows if single file upload) */}
                 {analyzedData && (
-                     <div className="bg-black/40 p-5 rounded-2xl border border-white/10 space-y-5">
+                     <div className="bg-black/40 p-5 rounded-2xl border border-white/10 space-y-5 animate-in slide-in-from-left-2">
                          <div className="flex items-center justify-between border-b border-white/5 pb-3">
                              <span className="text-xs font-bold text-white uppercase tracking-wider">Review Receipt</span>
-                             <button onClick={() => setAnalyzedData(null)} className="text-zinc-500 hover:text-white"><X className="w-4 h-4"/></button>
+                             <button onClick={() => { setAnalyzedData(null); setPreview(null); }} className="text-zinc-500 hover:text-white"><X className="w-4 h-4"/></button>
                          </div>
                          <input value={analyzedData.vendor} onChange={e=>setAnalyzedData({...analyzedData, vendor:e.target.value})} className="bg-transparent text-white font-bold w-full focus:outline-none text-xl border-b border-zinc-700" />
                          <div className="flex gap-2">
                             <input type="number" value={analyzedData.amount} onChange={e=>setAnalyzedData({...analyzedData, amount:parseFloat(e.target.value)})} className="bg-transparent text-white w-24 focus:outline-none font-mono text-xl" />
                             <span className="text-zinc-500">{analyzedData.currency}</span>
                          </div>
+                         <div className="text-xs text-zinc-500 truncate" title={analyzedData.sourceUrl}>Source: {analyzedData.sourceUrl}</div>
                          <button onClick={() => { onAddReceipt(analyzedData); setAnalyzedData(null); setPreview(null); }} className="w-full bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-500">Save</button>
                      </div>
                  )}
@@ -541,7 +594,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                          {columns.filter(c=>c.visible).map(c => (
                                              <td key={c.id} className="p-4">
                                                  {c.id === 'amount' ? <span className="text-white font-mono font-medium">{r.amount.toFixed(2)} {r.currency}</span> : 
-                                                  c.id === 'link' ? (r.sourceUrl ? <a href={r.sourceUrl} target="_blank" rel="noreferrer" className="text-indigo-400 hover:text-indigo-300"><ExternalLink className="w-4 h-4"/></a> : '-') :
+                                                  c.id === 'link' ? (r.sourceUrl && r.sourceUrl !== 'Upload' ? <span className="text-zinc-500 text-xs flex items-center gap-1" title={r.sourceUrl}><ExternalLink className="w-3 h-3" /> {r.sourceUrl.split('/').pop()?.slice(0, 10)}...</span> : '-') :
                                                   c.id === 'actions' ? <button onClick={() => onRemoveReceipt && onRemoveReceipt(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button> :
                                                   String(r[c.id as keyof ReceiptData] || '')}
                                              </td>
@@ -703,7 +756,11 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                               </div>
                                               <div className="text-right">
                                                   <p className="text-white font-mono text-sm font-bold">{r.amount.toFixed(2)} {r.currency}</p>
-                                                  {r.sourceUrl && <a href={r.sourceUrl} target="_blank" rel="noreferrer" className="text-xs text-indigo-400 hover:underline">View File</a>}
+                                                  {r.sourceUrl && r.sourceUrl !== 'Upload' && (
+                                                      <a href={r.sourceUrl} target="_blank" rel="noreferrer" className="text-xs text-indigo-400 hover:underline flex items-center gap-1 justify-end">
+                                                          <ExternalLink className="w-3 h-3"/> View
+                                                      </a>
+                                                  )}
                                               </div>
                                           </div>
                                       </div>
@@ -770,7 +827,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                           </td>
                                           
                                           <td className="p-4 text-center">
-                                              {row.sourceUrl && (
+                                              {row.sourceUrl && row.sourceUrl !== 'Upload' && (
                                                   <a href={row.sourceUrl} target="_blank" rel="noreferrer" className="text-zinc-500 hover:text-indigo-400 transition-colors inline-block p-1">
                                                       <ExternalLink className="w-3.5 h-3.5" />
                                                   </a>
