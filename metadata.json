@@ -1,0 +1,8 @@
+{
+  "name": "FounderOS",
+  "description": "The All-in-One Business Brain unifying finance, operations, and communications using Gemini 3’s multimodal reasoning.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

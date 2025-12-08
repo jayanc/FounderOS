@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Passes the variable from your local .env file to the build process
+        - VITE_API_KEY=${VITE_API_KEY}
+    ports:
+      - "8080:80"
+    env_file:
+      - .env
