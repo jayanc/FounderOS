@@ -1,7 +1,7 @@
 
 export enum ViewState {
   DASHBOARD = 'DASHBOARD',
-  FINANCE = 'FINANCE',
+  FINANCE = 'FINANCE', // Keeping ID same to preserve routing logic, UI label will change
   OPS = 'OPS',
   TIMESHEETS = 'TIMESHEETS',
   CONTRACTS = 'CONTRACTS',
@@ -34,6 +34,13 @@ export interface User {
   name: string;
   mfaVerified: boolean;
   storageProvider?: StorageProviderType;
+}
+
+export interface AppSettings {
+  country: string;
+  language: string;
+  currency: string; // Reporting Currency Code (e.g. 'USD')
+  exchangeRates: Record<string, number>; // Code -> Multiplier to Reporting Currency
 }
 
 export interface IntegrationAccount {
@@ -75,6 +82,7 @@ export interface BankTransaction {
   matchType?: 'Exact' | 'AI' | 'Manual'; // New field for match origin
   comments?: string;
   aiSuggestion?: string; // "High confidence match with receipt #123 because..."
+  sourceFile?: string; // Track which statement this came from
 }
 
 export interface ActionItem {

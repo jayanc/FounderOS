@@ -3,10 +3,11 @@ import React, { useState, useEffect, Suspense, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { Auth } from './components/Auth';
-import { ViewState, ReceiptData, ActionItem, CalendarEvent, IntegrationAccount, User, StorageStats } from './types';
+import { ViewState, ReceiptData, ActionItem, CalendarEvent, IntegrationAccount, User, StorageStats, BankTransaction, AppSettings } from './types';
 import { storageService } from './services/storageService';
 import { Loader2, HardDrive, Cpu } from 'lucide-react';
 import { CaptureTool } from './components/CaptureTool';
+import { analyzeReceipt } from './services/geminiService';
 
 // Lazy Load Heavy Modules to optimize initial bundle size
 const FinanceModule = React.lazy(() => import('./components/FinanceModule').then(module => ({ default: module.FinanceModule })));
@@ -21,7 +22,23 @@ const STORAGE_KEYS = {
     RECEIPTS: 'founder_os_receipts',
     TASKS: 'founder_os_tasks',
     EVENTS: 'founder_os_events',
-    ACCOUNTS: 'founder_os_accounts'
+    ACCOUNTS: 'founder_os_accounts',
+    BANK_TXS: 'founder_os_bank_txs',
+    SETTINGS: 'founder_os_settings'
+};
+
+const DEFAULT_SETTINGS: AppSettings = {
+    country: 'United States',
+    language: 'English',
+    currency: 'USD',
+    exchangeRates: {
+        'USD': 1,
+        'EUR': 1.08,
+        'GBP': 1.27,
+        'SEK': 0.096,
+        'CAD': 0.74,
+        'AUD': 0.65
+    }
 };
 
 const LoadingSpinner = () => (
@@ -38,9 +55,13 @@ const App: React.FC = () => {
   
   // Data State
   const [receipts, setReceipts] = useState<ReceiptData[]>([]);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [tasks, setTasks] = useState<ActionItem[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [accounts, setAccounts] = useState<IntegrationAccount[]>([]);
+  
+  // Global Settings
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   
   // Performance State
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
@@ -63,16 +84,24 @@ const App: React.FC = () => {
           
           const loadData = async () => {
               // Parallel Load
-              const [r, t, e, a] = await Promise.all([
+              const [r, b, t, e, a, s] = await Promise.all([
                   storageService.load<ReceiptData>(STORAGE_KEYS.RECEIPTS),
+                  storageService.load<BankTransaction>(STORAGE_KEYS.BANK_TXS),
                   storageService.load<ActionItem>(STORAGE_KEYS.TASKS),
                   storageService.load<CalendarEvent>(STORAGE_KEYS.EVENTS),
-                  storageService.load<IntegrationAccount>(STORAGE_KEYS.ACCOUNTS)
+                  storageService.load<IntegrationAccount>(STORAGE_KEYS.ACCOUNTS),
+                  storageService.load<AppSettings>(STORAGE_KEYS.SETTINGS) // Load settings separately, might need cast
               ]);
               setReceipts(r);
+              setBankTransactions(b);
               setTasks(t);
               setEvents(e);
               setAccounts(a);
+              // Handle settings specifically as it's an object not array
+              const loadedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+              if (loadedSettings) {
+                  setSettings(JSON.parse(loadedSettings));
+              }
               
               // Load Stats
               updateStats();
@@ -83,9 +112,11 @@ const App: React.FC = () => {
 
   // 3. Persist Data (Service handles Debouncing internally)
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.RECEIPTS, receipts); }, [receipts, user]);
+  useEffect(() => { if (user) storageService.save(STORAGE_KEYS.BANK_TXS, bankTransactions); }, [bankTransactions, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.TASKS, tasks); }, [tasks, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.EVENTS, events); }, [events, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.ACCOUNTS, accounts); }, [accounts, user]);
+  useEffect(() => { if (user) { localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings)); } }, [settings, user]);
 
   // Periodic Stats Update
   useEffect(() => {
@@ -108,9 +139,11 @@ const App: React.FC = () => {
   const handleLogout = () => {
       setUser(null);
       setReceipts([]);
+      setBankTransactions([]);
       setTasks([]);
       setEvents([]);
       setAccounts([]);
+      setSettings(DEFAULT_SETTINGS);
       localStorage.removeItem(STORAGE_KEYS.USER);
   };
 
@@ -119,15 +152,19 @@ const App: React.FC = () => {
       if (!user) return;
       // Clear In-Memory State
       setReceipts([]);
+      setBankTransactions([]);
       setTasks([]);
       setEvents([]);
       setAccounts([]);
+      setSettings(DEFAULT_SETTINGS);
       
       // Clear Storage
       await storageService.clearUserCache(STORAGE_KEYS.RECEIPTS);
+      await storageService.clearUserCache(STORAGE_KEYS.BANK_TXS);
       await storageService.clearUserCache(STORAGE_KEYS.TASKS);
       await storageService.clearUserCache(STORAGE_KEYS.EVENTS);
       await storageService.clearUserCache(STORAGE_KEYS.ACCOUNTS);
+      localStorage.removeItem(STORAGE_KEYS.SETTINGS);
       
       updateStats();
   };
@@ -135,6 +172,12 @@ const App: React.FC = () => {
   // Optimized Data Actions with Callback Stability (though setState is stable)
   const handleAddReceipt = (receipt: ReceiptData) => setReceipts(prev => [receipt, ...prev]);
   const handleRemoveReceipt = (id: string) => setReceipts(prev => prev.filter(r => r.id !== id));
+  
+  // New handler for Bank Transactions
+  const handleUpdateBankTransactions = (txs: BankTransaction[] | ((prev: BankTransaction[]) => BankTransaction[])) => {
+      setBankTransactions(txs);
+  };
+
   const handleAddTasks = (newTasks: ActionItem[]) => setTasks(prev => [...newTasks, ...prev]);
   const handleRemoveTask = (id: string) => setTasks(prev => prev.filter(t => t.id !== id));
   const handleAddEvents = (newEvents: CalendarEvent[]) => setEvents(prev => [...newEvents, ...prev]);
@@ -143,6 +186,23 @@ const App: React.FC = () => {
 
   const openCapture = () => setIsCaptureOpen(true);
 
+  // Handle Import from Capture Tool
+  const handleCaptureImport = async (file: File) => {
+      if (currentView === ViewState.FINANCE) {
+          try {
+              const buffer = await file.arrayBuffer();
+              const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+              const result = await analyzeReceipt(base64, file.type, file.name);
+              handleAddReceipt(result);
+              alert("Snapshot imported as Receipt!");
+          } catch(e) {
+              alert("Failed to analyze snapshot.");
+          }
+      } else {
+          alert("Capture import available for Accounting module. (Generic file saved to local storage history)");
+      }
+  };
+
   if (!user) {
       return <Auth onLogin={handleLogin} />;
   }
@@ -150,9 +210,21 @@ const App: React.FC = () => {
   const renderView = () => {
     switch (currentView) {
       case ViewState.DASHBOARD:
-        return <Dashboard receipts={receipts} tasks={tasks} user={user} onNavigate={setCurrentView} />;
+        return <Dashboard receipts={receipts} tasks={tasks} user={user} onNavigate={setCurrentView} settings={settings} />;
       case ViewState.FINANCE:
-        return <FinanceModule receipts={receipts} onAddReceipt={handleAddReceipt} onRemoveReceipt={handleRemoveReceipt} accounts={accounts} onOpenCapture={openCapture} />;
+        return (
+            <FinanceModule 
+                receipts={receipts} 
+                onAddReceipt={handleAddReceipt} 
+                onRemoveReceipt={handleRemoveReceipt} 
+                accounts={accounts} 
+                onOpenCapture={openCapture}
+                bankTransactions={bankTransactions}
+                onUpdateBankTransactions={handleUpdateBankTransactions}
+                settings={settings}
+                onUpdateSettings={setSettings}
+            />
+        );
       case ViewState.OPS:
         return (
           <OpsModule 
@@ -181,10 +253,12 @@ const App: React.FC = () => {
                 tasks={tasks}
                 events={events}
                 onClearData={handleClearData}
+                settings={settings}
+                onUpdateSettings={setSettings}
             />
         );
       default:
-        return <Dashboard receipts={receipts} tasks={tasks} user={user} onNavigate={setCurrentView} />;
+        return <Dashboard receipts={receipts} tasks={tasks} user={user} onNavigate={setCurrentView} settings={settings} />;
     }
   };
 
@@ -234,7 +308,12 @@ const App: React.FC = () => {
       </main>
 
       {/* Global Capture Tool */}
-      <CaptureTool currentView={currentView} isOpen={isCaptureOpen} onClose={() => setIsCaptureOpen(false)} />
+      <CaptureTool 
+        currentView={currentView} 
+        isOpen={isCaptureOpen} 
+        onClose={() => setIsCaptureOpen(false)}
+        onImport={handleCaptureImport}
+      />
     </div>
   );
 };

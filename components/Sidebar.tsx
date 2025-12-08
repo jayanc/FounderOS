@@ -14,7 +14,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogout, onOpenCapture }) => {
   const navItems = [
     { id: ViewState.DASHBOARD, label: 'Briefing', icon: LayoutDashboard },
-    { id: ViewState.FINANCE, label: 'Finance', icon: Receipt },
+    { id: ViewState.FINANCE, label: 'Accounting', icon: Receipt },
     { id: ViewState.PLANNING, label: 'Growth Plan', icon: TrendingUp },
     { id: ViewState.OPS, label: 'Workflow', icon: MessageSquareMore },
     { id: ViewState.TIMESHEETS, label: 'Timesheets', icon: Clock },

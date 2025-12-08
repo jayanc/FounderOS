@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
-import { IntegrationAccount, IntegrationType, ApiConfig, ReceiptData, ActionItem, CalendarEvent } from '../types';
-import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning } from 'lucide-react';
+import { IntegrationAccount, IntegrationType, ApiConfig, ReceiptData, ActionItem, CalendarEvent, AppSettings } from '../types';
+import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning, Globe, DollarSign, Languages } from 'lucide-react';
 import { securityService } from '../services/securityService';
 
 interface ConnectAccountsProps {
@@ -13,9 +13,11 @@ interface ConnectAccountsProps {
   tasks: ActionItem[];
   events: CalendarEvent[];
   onClearData: () => void;
+  settings: AppSettings;
+  onUpdateSettings: (settings: AppSettings) => void;
 }
 
-export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onToggleAccount, onAddAccount, receipts, tasks, events, onClearData }) => {
+export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onToggleAccount, onAddAccount, receipts, tasks, events, onClearData, settings, onUpdateSettings }) => {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -77,6 +79,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   const handleExportData = () => {
       const exportData = {
           timestamp: new Date().toISOString(),
+          settings,
           receipts,
           tasks,
           events,
@@ -96,8 +99,6 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
       setIsBackingUp(true);
       // Simulate Drive API Upload
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // In a real implementation, this would use the user's OAuth token to upload to Drive
       alert("Backup successfully uploaded to your Google Drive folder 'FounderOS_Backups'.");
       setIsBackingUp(false);
   };
@@ -115,9 +116,70 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   return (
     <div className="max-w-5xl mx-auto flex flex-col gap-8 relative pb-20">
       <header>
-         <h2 className="text-2xl font-bold text-white mb-2">Data Sources & Integrations</h2>
-         <p className="text-zinc-400">Connect your email, cloud storage, and local folders to enable the "Business Brain" to extract receipts and tasks.</p>
+         <h2 className="text-2xl font-bold text-white mb-2">Settings & Integrations</h2>
+         <p className="text-zinc-400">Configure global preferences, data sources, and system controls.</p>
       </header>
+
+      {/* Global Preferences Section */}
+      <div>
+          <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
+              <Globe className="w-5 h-5" /> Global Preferences
+          </h3>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-2 flex items-center gap-2">
+                      <Languages className="w-3 h-3" /> Language
+                  </label>
+                  <select 
+                      value={settings.language}
+                      onChange={(e) => onUpdateSettings({ ...settings, language: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  >
+                      <option value="English">English</option>
+                      <option value="Spanish">Español</option>
+                      <option value="French">Français</option>
+                      <option value="German">Deutsch</option>
+                      <option value="Swedish">Svenska</option>
+                  </select>
+              </div>
+              
+              <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-2 flex items-center gap-2">
+                      <Globe className="w-3 h-3" /> Country / Region
+                  </label>
+                  <select 
+                      value={settings.country}
+                      onChange={(e) => onUpdateSettings({ ...settings, country: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  >
+                      <option value="United States">United States</option>
+                      <option value="United Kingdom">United Kingdom</option>
+                      <option value="European Union">European Union</option>
+                      <option value="Sweden">Sweden</option>
+                      <option value="Canada">Canada</option>
+                      <option value="Australia">Australia</option>
+                  </select>
+              </div>
+
+              <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-2 flex items-center gap-2">
+                      <DollarSign className="w-3 h-3" /> Reporting Currency
+                  </label>
+                  <select 
+                      value={settings.currency}
+                      onChange={(e) => onUpdateSettings({ ...settings, currency: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  >
+                      <option value="USD">USD ($)</option>
+                      <option value="EUR">EUR (€)</option>
+                      <option value="GBP">GBP (£)</option>
+                      <option value="SEK">SEK (kr)</option>
+                      <option value="CAD">CAD ($)</option>
+                      <option value="AUD">AUD ($)</option>
+                  </select>
+              </div>
+          </div>
+      </div>
 
       {/* Cloud & Email Section */}
       <div>

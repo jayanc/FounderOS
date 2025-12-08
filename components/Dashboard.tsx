@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Briefing, ReceiptData, ActionItem, User, ViewState } from '../types';
+import { Briefing, ReceiptData, ActionItem, User, ViewState, AppSettings } from '../types';
 import { generateDailyBriefing } from '../services/geminiService';
 import { Sparkles, ArrowUpRight, TrendingUp, AlertTriangle, Loader2, Calculator, Receipt, PieChart as PieIcon, Activity, CalendarDays, Wallet, Clock, FileText, ChevronRight } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
@@ -10,9 +10,10 @@ interface DashboardProps {
   tasks: ActionItem[];
   user: User | null;
   onNavigate: (view: ViewState) => void;
+  settings: AppSettings;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onNavigate }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onNavigate, settings }) => {
   const [briefing, setBriefing] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [vatInput, setVatInput] = useState<number | ''>('');
@@ -30,16 +31,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
     }
   };
 
-  const totalSpent = receipts.reduce((acc, r) => acc + r.amount, 0);
+  const getRate = (code: string) => settings.exchangeRates[code] || 1;
+
+  const totalSpent = receipts.reduce((acc, r) => {
+      // Normalize to Reporting Currency
+      const rate = getRate(r.currency);
+      return acc + (r.amount * rate);
+  }, 0);
+
   const highPriorityTasks = tasks.filter(t => t.priority === 'High').length;
   const receiptCount = receipts.length;
 
   const categoryData = receipts.reduce((acc: any[], r) => {
       const existing = acc.find(c => c.name === r.category);
+      const rate = getRate(r.currency);
+      const val = r.amount * rate;
+      
       if (existing) {
-          existing.value += r.amount;
+          existing.value += val;
       } else {
-          acc.push({ name: r.category, value: r.amount });
+          acc.push({ name: r.category, value: val });
       }
       return acc;
   }, []);
@@ -60,6 +71,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
             <div className="flex items-center gap-2 mb-2">
                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
                     <Activity className="w-3 h-3" /> System Operational
+                 </span>
+                 <span className="text-[10px] text-zinc-500 bg-zinc-900 px-2 py-1 rounded border border-zinc-800">
+                     {settings.country} • {settings.currency}
                  </span>
             </div>
             <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">
@@ -98,7 +112,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
                 </div>
                 <div>
                     <p className="text-zinc-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">Total Spend <ChevronRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity"/></p>
-                    <p className="text-3xl font-bold text-white mt-1 tabular-nums tracking-tight">${totalSpent.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+                    <p className="text-3xl font-bold text-white mt-1 tabular-nums tracking-tight">{totalSpent.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-sm text-zinc-500">{settings.currency}</span></p>
                 </div>
             </div>
         </div>
@@ -253,6 +267,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
                                   <Tooltip 
                                       contentStyle={{ backgroundColor: '#09090b', borderColor: '#27272a', borderRadius: '12px', color: '#fff', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)' }}
                                       itemStyle={{ color: '#e4e4e7', fontSize: '12px' }}
+                                      formatter={(value: any) => [`${value.toFixed(2)} ${settings.currency}`, 'Value']}
                                       cursor={false}
                                   />
                                   <Legend 
@@ -267,7 +282,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none mb-8">
                              <div className="text-center">
                                  <p className="text-xs text-zinc-500 uppercase font-bold">Total</p>
-                                 <p className="text-lg font-bold text-white">${totalSpent.toFixed(0)}</p>
+                                 <p className="text-lg font-bold text-white">{totalSpent.toFixed(0)} <span className="text-[10px]">{settings.currency}</span></p>
                              </div>
                           </div>
                       </div>

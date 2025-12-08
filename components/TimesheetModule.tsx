@@ -34,8 +34,9 @@ export const TimesheetModule: React.FC<TimesheetModuleProps> = ({ onOpenCapture 
     const [historyLogs, setHistoryLogs] = useState(storageService.getHistory(ViewState.TIMESHEETS));
     const [showManageFiles, setShowManageFiles] = useState(false);
     
-    // --- Search/Replace & Sorting ---
+    // --- Search/Replace & Sorting & Menus ---
     const [showSearchReplace, setShowSearchReplace] = useState(false);
+    const [showCleanupMenu, setShowCleanupMenu] = useState(false);
     const [findText, setFindText] = useState('');
     const [replaceText, setReplaceText] = useState('');
     const [searchField, setSearchField] = useState<keyof TimesheetEntry>('project');
@@ -506,19 +507,28 @@ export const TimesheetModule: React.FC<TimesheetModuleProps> = ({ onOpenCapture 
                                  </div>
                                  <div className="h-4 w-px bg-white/10"></div>
                                  
-                                 {/* Cleanup Tools Dropdown */}
-                                 <div className="flex items-center gap-2 group relative">
-                                    <button className="flex items-center gap-2 text-xs font-medium text-zinc-400 hover:text-white transition-colors bg-black/30 px-3 py-1.5 rounded-lg border border-zinc-800">
+                                 {/* Cleanup Tools Dropdown - Fixed with State */}
+                                 <div className="relative">
+                                    <button 
+                                        onClick={() => setShowCleanupMenu(!showCleanupMenu)}
+                                        className={`flex items-center gap-2 text-xs font-medium transition-colors px-3 py-1.5 rounded-lg border ${showCleanupMenu ? 'text-white bg-zinc-800 border-zinc-700' : 'text-zinc-400 hover:text-white bg-black/30 border-zinc-800'}`}
+                                    >
                                         <Eraser className="w-3 h-3" /> Cleanup Tools
                                     </button>
-                                    <div className="absolute top-full left-0 mt-2 w-48 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl p-1 hidden group-hover:block z-20">
-                                        <button onClick={removeDuplicates} className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-white/10 rounded-lg flex items-center gap-2">
-                                            <FileWarning className="w-3 h-3 text-amber-500" /> Remove Duplicates
-                                        </button>
-                                        <button onClick={removeZeroHours} className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-white/10 rounded-lg flex items-center gap-2">
-                                            <Trash2 className="w-3 h-3 text-rose-500" /> Remove Zero Hours
-                                        </button>
-                                    </div>
+                                    
+                                    {showCleanupMenu && (
+                                        <>
+                                            <div className="fixed inset-0 z-10" onClick={() => setShowCleanupMenu(false)} />
+                                            <div className="absolute top-full left-0 mt-2 w-48 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl p-1 z-20 animate-in fade-in zoom-in-95 duration-100">
+                                                <button onClick={() => { removeDuplicates(); setShowCleanupMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-white/10 rounded-lg flex items-center gap-2 transition-colors">
+                                                    <FileWarning className="w-3 h-3 text-amber-500" /> Remove Duplicates
+                                                </button>
+                                                <button onClick={() => { removeZeroHours(); setShowCleanupMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-white/10 rounded-lg flex items-center gap-2 transition-colors">
+                                                    <Trash2 className="w-3 h-3 text-rose-500" /> Remove Zero Hours
+                                                </button>
+                                            </div>
+                                        </>
+                                    )}
                                  </div>
 
                                  <div className="flex items-center gap-2">

@@ -1,10 +1,10 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { ReceiptData, IntegrationAccount, BankTransaction, ReconciliationSuggestion, ViewState } from '../types';
+import { ReceiptData, IntegrationAccount, BankTransaction, ReconciliationSuggestion, ViewState, AppSettings } from '../types';
 import { analyzeReceipt, parseBankStatement, suggestMatches, extractReceiptsFromZip, analyzeReceiptBatch } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square, FileArchive } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend } from 'recharts';
+import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square, FileArchive, PlayCircle, Coins } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, ComposedChart, Line } from 'recharts';
 import JSZip from 'jszip';
 
 // Helper to guess mime type
@@ -17,24 +17,16 @@ const getMimeType = (filename: string) => {
     return 'application/octet-stream';
 };
 
-// Helper for file download
-const downloadData = (content: string, filename: string, type: 'csv' | 'json') => {
-    const mime = type === 'csv' ? 'text/csv;charset=utf-8;' : 'application/json';
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-};
-
 interface FinanceModuleProps {
   receipts: ReceiptData[];
   onAddReceipt: (receipt: ReceiptData) => void;
   onRemoveReceipt?: (id: string) => void;
   accounts: IntegrationAccount[];
   onOpenCapture: () => void;
+  bankTransactions: BankTransaction[];
+  onUpdateBankTransactions: (txs: BankTransaction[] | ((prev: BankTransaction[]) => BankTransaction[])) => void;
+  settings: AppSettings;
+  onUpdateSettings: (settings: AppSettings) => void;
 }
 
 interface ColumnConfig {
@@ -52,7 +44,17 @@ const VAT_RATES = [
     { label: '0%', value: 0 }
 ];
 
-export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddReceipt, onRemoveReceipt, accounts, onOpenCapture }) => {
+export const FinanceModule: React.FC<FinanceModuleProps> = ({ 
+    receipts, 
+    onAddReceipt, 
+    onRemoveReceipt, 
+    accounts, 
+    onOpenCapture,
+    bankTransactions,
+    onUpdateBankTransactions,
+    settings,
+    onUpdateSettings
+}) => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'ledger' | 'reconciliation'>('ledger');
   
@@ -62,8 +64,11 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   const [statusText, setStatusText] = useState("Analyzing...");
   const [preview, setPreview] = useState<string | null>(null);
   const [analyzedData, setAnalyzedData] = useState<ReceiptData | null>(null);
-  const [showVatCalc, setShowVatCalc] = useState(false);
-  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showRatesModal, setShowRatesModal] = useState(false);
+  
+  // Receipt Details Modal
+  const [selectedReceipt, setSelectedReceipt] = useState<ReceiptData | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Search & Replace
@@ -90,8 +95,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   // Reconciliation
   const [reconcileView, setReconcileView] = useState<'split' | 'unified'>('split');
   const [reconcileFilter, setReconcileFilter] = useState<'all' | 'unmatched' | 'matched'>('unmatched');
-  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [isMagicMatching, setIsMagicMatching] = useState(false);
+  const [isBankAnalyzing, setIsBankAnalyzing] = useState(false); // Bank Processing
   const [matchSuggestions, setMatchSuggestions] = useState<ReconciliationSuggestion[]>([]);
   const [showMatchReview, setShowMatchReview] = useState(false);
   const bankInputRef = useRef<HTMLInputElement>(null);
@@ -101,6 +106,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   const [checkedRcptIds, setCheckedRcptIds] = useState<Set<string>>(new Set());
 
   // --- MEMOIZED CALCULATIONS ---
+
+  const getRate = (code: string) => settings.exchangeRates[code] || 1;
 
   const sortedReceipts = useMemo(() => {
     if (!sortConfig) return receipts;
@@ -117,32 +124,45 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   const chartData = useMemo(() => {
     return receipts.reduce((acc: any[], r) => {
       const existing = acc.find(item => item.name === r.category);
+      // Normalize currency for chart
+      const rate = getRate(r.currency);
+      const convertedAmount = r.amount * rate;
+
       if (existing) {
-        existing.value += r.amount;
+        existing.value += convertedAmount;
+        existing.count += 1;
       } else {
-        acc.push({ name: r.category, value: r.amount });
+        acc.push({ name: r.category, value: convertedAmount, count: 1 });
       }
       return acc;
     }, []);
-  }, [receipts]);
+  }, [receipts, settings.exchangeRates]);
 
-  // Reconciliation Stats Calculation
+  // Enhanced Reconciliation Stats Calculation
   const reconciliationStats = useMemo(() => {
+      // "Total" usually refers to Bank Transactions as the source of truth
+      const targetTxs = bankTransactions; 
+      
       let matchedCount = 0;
       let matchedAmount = 0;
       let totalExpenseAmount = 0;
       let missing = 0;
+      
       let exactMatches = 0;
       let aiMatches = 0;
       let manualMatches = 0;
 
-      bankTransactions.forEach(tx => {
+      targetTxs.forEach(tx => {
+          // Normalize bank transaction amounts to reporting currency for stats
+          const rate = getRate(tx.currency);
+          const convertedTxAmount = Math.abs(tx.amount) * rate;
+
           if (tx.status === 'Ignored') return;
-          if (tx.amount < 0) totalExpenseAmount += Math.abs(tx.amount);
+          if (tx.amount < 0) totalExpenseAmount += convertedTxAmount;
           
           if (tx.matchedReceiptId) {
               matchedCount++;
-              matchedAmount += Math.abs(tx.amount);
+              matchedAmount += convertedTxAmount;
               if (tx.matchType === 'Exact') exactMatches++;
               else if (tx.matchType === 'AI') aiMatches++;
               else manualMatches++;
@@ -151,17 +171,25 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
           }
       });
 
+      const totalCount = targetTxs.length;
+      const progressPercent = totalCount > 0 ? (matchedCount / totalCount) * 100 : 0;
+      const valuePercent = totalExpenseAmount > 0 ? (matchedAmount / totalExpenseAmount) * 100 : 0;
+
       return {
           matched: matchedCount,
           missing,
-          unreconciled: receipts.length - matchedCount,
+          unreconciled: totalCount - matchedCount,
           matchedAmount,
           unmatchedAmount: totalExpenseAmount - matchedAmount,
+          totalAmount: totalExpenseAmount,
           exactMatches,
           aiMatches,
-          manualMatches
+          manualMatches,
+          totalTx: totalCount,
+          progressPercent,
+          valuePercent
       };
-  }, [bankTransactions, receipts.length]);
+  }, [bankTransactions, settings.exchangeRates]);
 
   const unifiedReportData = useMemo(() => {
       const reportData: any[] = [];
@@ -183,12 +211,15 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
               date: tx.date,
               bankDesc: tx.description,
               bankAmount: tx.amount,
+              bankCurrency: tx.currency,
               receiptDate: match?.date || '',
               receiptVendor: match?.vendor || '',
               receiptAmount: match ? (match.amount * -1) : '',
-              variance: match ? (Math.abs(tx.amount) - match.amount).toFixed(2) : '',
+              receiptCurrency: match?.currency || '',
+              variance: match ? (Math.abs(tx.amount) - match.amount).toFixed(2) : '', // Raw variance, hard to normalize per row easily in display without clutter
               notes: tx.aiSuggestion || '',
-              sourceUrl: match?.sourceUrl
+              sourceUrl: match?.sourceUrl,
+              bankSource: tx.sourceFile
           });
       });
 
@@ -203,12 +234,15 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                       date: r.date,
                       bankDesc: '',
                       bankAmount: '',
+                      bankCurrency: '',
                       receiptDate: r.date,
                       receiptVendor: r.vendor,
                       receiptAmount: r.amount, 
+                      receiptCurrency: r.currency,
                       variance: '',
                       notes: 'Logged but not in bank',
-                      sourceUrl: r.sourceUrl
+                      sourceUrl: r.sourceUrl,
+                      bankSource: '-'
                   });
               }
           });
@@ -271,70 +305,52 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (!e.target.files || e.target.files.length === 0) return;
-      
-      const files: File[] = Array.from(e.target.files);
+  const processFileList = async (files: File[]) => {
       setIsAnalyzing(true);
       setStatusText("Initializing batch...");
-      setBatchProgress({ current: 0, total: files.length }); // Initial estimation, might change if zip expands
+      setBatchProgress({ current: 0, total: files.length });
 
       try {
           const newReceipts: ReceiptData[] = [];
-
-          // 1. Handle Zip Files
           const zips = files.filter(f => f.name.endsWith('.zip'));
+          
           for (const zip of zips) {
               setStatusText(`Unpacking ${zip.name}...`);
               const buffer = await zip.arrayBuffer();
-              
-              // Helper to update progress from inside the zip processor
               const zipProgress = (done: number, total: number) => {
                   setBatchProgress({ current: done, total });
                   setStatusText(`Extracting from Zip: ${done}/${total}`);
               };
-
               const extracted = await extractReceiptsFromZip(buffer, zip.name, zipProgress);
               newReceipts.push(...extracted);
           }
 
-          // 2. Handle Regular Files (Images/PDFs)
           const regulars = files.filter(f => !f.name.endsWith('.zip'));
-          
           if (regulars.length > 0) {
                setStatusText(`Analyzing ${regulars.length} documents...`);
-               // Adjust total for progress bar (Zip items + Regular items)
-               // Simple logic: Reset progress for the batch of regulars
                setBatchProgress({ current: 0, total: regulars.length });
-               
                const batchProgressHandler = (done: number, total: number) => {
                    setBatchProgress({ current: done, total });
                    setStatusText(`Analyzing: ${done}/${total}`);
                };
-
                const batchResults = await analyzeReceiptBatch(regulars, batchProgressHandler);
                newReceipts.push(...batchResults);
           }
 
-          // 3. Workflow Decision
           if (files.length === 1 && !files[0].name.endsWith('.zip') && newReceipts.length === 1) {
-              // Single File -> Review Modal
               setAnalyzedData(newReceipts[0]);
-              // Also populate preview for the single file
               const file = files[0];
               const reader = new FileReader();
               reader.onload = (e) => setPreview(e.target?.result as string);
               reader.readAsDataURL(file);
           } else {
-              // Bulk / Zip -> Auto Add
               newReceipts.forEach(r => onAddReceipt(r));
               setStatusText("Done!");
-              await new Promise(r => setTimeout(r, 800)); // Show done briefly
+              await new Promise(r => setTimeout(r, 800));
           }
-          
       } catch (e) {
           console.error(e);
-          alert("Error processing files. Please ensure they are valid images, PDFs, or Zip archives.");
+          alert("Error processing files.");
       } finally {
           setIsAnalyzing(false);
           setBatchProgress(null);
@@ -342,15 +358,26 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!e.target.files || e.target.files.length === 0) return;
+      const files: File[] = Array.from(e.target.files);
+      await processFileList(files);
+  };
+
   // --- RECONCILIATION LOGIC ---
 
   const findProgrammaticMatches = () => {
       let exactMatchesFound = 0;
-      setBankTransactions(prev => prev.map(tx => {
+      onUpdateBankTransactions(prev => prev.map(tx => {
           if (tx.matchedReceiptId) return tx; // Already matched
           
           const match = receipts.find(r => {
-               // 1. Exact Amount (within small float variance)
+               // 1. Exact Amount (within small float variance, handle multi-currency loosely or strictly?)
+               // Ideally we match by original currency if possible, or converted if close.
+               // For simplicity, let's assume same currency matches are prioritized.
+               
+               if (tx.currency !== r.currency) return false; // Strict currency match for programmatic
+
                const amtMatch = Math.abs(Math.abs(tx.amount) - r.amount) < 0.05;
                // 2. Date within 3 days
                const d1 = new Date(tx.date);
@@ -381,13 +408,21 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       setIsMagicMatching(true);
       try {
           const exactCount = findProgrammaticMatches();
-          const suggestions = await suggestMatches(bankTransactions.filter(t => !t.matchedReceiptId), receipts);
+          // Find leftovers
+          const unmatchedTxs = bankTransactions.filter(t => !t.matchedReceiptId);
+          if(unmatchedTxs.length === 0) {
+              alert(exactCount > 0 ? `Matched ${exactCount} items perfectly. All done!` : "All transactions already matched.");
+              setIsMagicMatching(false);
+              return;
+          }
+
+          const suggestions = await suggestMatches(unmatchedTxs, receipts);
           
           if (suggestions.length > 0) {
               setMatchSuggestions(suggestions);
               setShowMatchReview(true);
           } else {
-              if (exactCount > 0) alert(`Found ${exactCount} exact matches. No further AI matches found.`);
+              if (exactCount > 0) alert(`Found ${exactCount} exact matches. No fuzzy AI matches found.`);
               else alert("No matches found.");
           }
       } catch (e) {
@@ -405,7 +440,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       const txId = Array.from(checkedTxIds)[0];
       const rcptId = Array.from(checkedRcptIds)[0];
 
-      setBankTransactions(prev => prev.map(t => 
+      onUpdateBankTransactions(prev => prev.map(t => 
           t.id === txId 
           ? { ...t, matchedReceiptId: rcptId, status: 'Reconciled', matchType: 'Manual', aiSuggestion: 'Manually Linked via Checkbox' }
           : t
@@ -429,7 +464,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   };
   
   const acceptMatch = (suggestion: ReconciliationSuggestion) => {
-      setBankTransactions(prev => prev.map(t => 
+      onUpdateBankTransactions(prev => prev.map(t => 
           t.id === suggestion.transactionId 
           ? { ...t, matchedReceiptId: suggestion.receiptId, status: 'Reconciled', matchType: 'AI', aiSuggestion: suggestion.reasoning }
           : t
@@ -439,11 +474,16 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
   };
 
   const handleUnmatch = (txId: string) => {
-      setBankTransactions(prev => prev.map(t => 
+      onUpdateBankTransactions(prev => prev.map(t => 
           t.id === txId 
           ? { ...t, matchedReceiptId: undefined, status: 'Unreconciled', matchType: undefined, aiSuggestion: undefined }
           : t
       ));
+  };
+
+  const updateRate = (code: string, newRate: number) => {
+      const updated = { ...settings.exchangeRates, [code]: newRate };
+      onUpdateSettings({ ...settings, exchangeRates: updated });
   };
 
   // --- RENDER HELPERS ---
@@ -454,15 +494,31 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
       return null;
   };
 
+  // Extract all unique currencies for Rate Management
+  const availableCurrencies = useMemo(() => {
+      const set = new Set<string>();
+      receipts.forEach(r => set.add(r.currency));
+      bankTransactions.forEach(t => set.add(t.currency));
+      set.add(settings.currency); // Ensure reporting currency is there
+      return Array.from(set);
+  }, [receipts, bankTransactions, settings.currency]);
+
   // --- RENDER ---
   return (
     <div className="flex flex-col h-full gap-8">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-white/5 pb-6">
         <div>
-            <h2 className="text-3xl font-bold text-white tracking-tight">Financial Vision</h2>
+            <h2 className="text-3xl font-bold text-white tracking-tight">Accounting</h2>
             <p className="text-zinc-400 mt-2 font-light">Ledger management and intelligent bank reconciliation.</p>
         </div>
         <div className="flex gap-4 items-center">
+            <button 
+                onClick={() => setShowRatesModal(true)} 
+                className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors flex items-center gap-2 text-xs font-medium" 
+                title="Manage Exchange Rates"
+            >
+                <Coins className="w-4 h-4" /> Rates
+            </button>
             <button onClick={onOpenCapture} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/30 transition-colors bg-zinc-900" title="Capture Snapshot">
                 <Camera className="w-5 h-5" />
             </button>
@@ -472,6 +528,41 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
             </div>
         </div>
       </header>
+
+      {/* RATES MODAL */}
+      {showRatesModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in">
+              <div className="bg-zinc-950 border border-zinc-800 w-full max-w-md rounded-2xl p-6 shadow-2xl">
+                  <div className="flex justify-between items-center mb-6">
+                      <div>
+                          <h3 className="text-lg font-bold text-white flex items-center gap-2"><Coins className="w-5 h-5 text-indigo-400"/> Exchange Rates</h3>
+                          <p className="text-xs text-zinc-500">Base Currency: <span className="text-white font-bold">{settings.currency}</span></p>
+                      </div>
+                      <button onClick={() => setShowRatesModal(false)}><X className="w-5 h-5 text-zinc-500 hover:text-white"/></button>
+                  </div>
+                  <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                      {availableCurrencies.filter(c => c !== settings.currency).map(code => (
+                          <div key={code} className="flex justify-between items-center p-3 bg-zinc-900 rounded-xl border border-zinc-800">
+                              <span className="font-mono text-white font-bold">{code}</span>
+                              <div className="flex items-center gap-2">
+                                  <span className="text-xs text-zinc-500">Rate:</span>
+                                  <input 
+                                    type="number" 
+                                    step="0.01"
+                                    value={settings.exchangeRates[code] || 1} 
+                                    onChange={(e) => updateRate(code, parseFloat(e.target.value))}
+                                    className="w-24 bg-black/40 border border-zinc-700 rounded-lg px-2 py-1 text-right text-white text-sm focus:outline-none focus:border-indigo-500"
+                                  />
+                              </div>
+                          </div>
+                      ))}
+                      {availableCurrencies.length <= 1 && (
+                          <p className="text-center text-zinc-500 text-sm py-4">No foreign currencies detected.</p>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
 
       {/* SEARCH AND REPLACE TOOLBAR */}
       {showSearchReplace && (
@@ -497,6 +588,88 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
               </div>
               <button onClick={handleSearchReplace} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors">Apply Replace</button>
               <button onClick={() => setShowSearchReplace(false)} className="text-zinc-500 hover:text-white ml-auto"><X className="w-4 h-4"/></button>
+          </div>
+      )}
+
+      {/* RECEIPT DETAIL MODAL */}
+      {selectedReceipt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+              <div className="bg-zinc-950 border border-zinc-800 w-full max-w-4xl h-[85vh] rounded-3xl shadow-2xl flex flex-col md:flex-row overflow-hidden">
+                  {/* Left: Image/File Preview */}
+                  <div className="md:w-1/2 bg-black border-r border-zinc-800 flex items-center justify-center p-4 relative group">
+                      {selectedReceipt.imageUrl ? (
+                          <img src={selectedReceipt.imageUrl} alt="Receipt" className="max-w-full max-h-full object-contain shadow-2xl rounded-lg" />
+                      ) : (
+                          <div className="text-center text-zinc-500 flex flex-col items-center">
+                              <FileText className="w-20 h-20 mb-4 opacity-20" />
+                              <p>No preview available.</p>
+                              {selectedReceipt.sourceUrl && <span className="text-xs text-zinc-600 mt-2 truncate max-w-xs">{selectedReceipt.sourceUrl}</span>}
+                          </div>
+                      )}
+                      {selectedReceipt.sourceUrl && selectedReceipt.sourceUrl !== 'Upload' && (
+                          <a href={selectedReceipt.sourceUrl} target="_blank" rel="noreferrer" className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-black/80 rounded-lg text-white backdrop-blur-md opacity-0 group-hover:opacity-100 transition-opacity">
+                              <ExternalLink className="w-5 h-5"/>
+                          </a>
+                      )}
+                  </div>
+
+                  {/* Right: Details */}
+                  <div className="md:w-1/2 flex flex-col h-full bg-zinc-900">
+                      <div className="p-6 border-b border-zinc-800 flex justify-between items-center">
+                          <div>
+                              <h2 className="text-xl font-bold text-white">{selectedReceipt.vendor}</h2>
+                              <p className="text-zinc-400 text-sm mt-1">{selectedReceipt.date} • {selectedReceipt.category}</p>
+                          </div>
+                          <button onClick={() => setSelectedReceipt(null)} className="p-2 hover:bg-white/10 rounded-full text-zinc-400 hover:text-white transition-colors"><X className="w-6 h-6"/></button>
+                      </div>
+                      
+                      <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                          <div className="grid grid-cols-2 gap-4">
+                              <div className="bg-black/30 p-4 rounded-xl border border-zinc-800">
+                                  <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Total Amount</span>
+                                  <p className="text-2xl font-mono font-bold text-emerald-400 mt-1">{selectedReceipt.amount.toFixed(2)} {selectedReceipt.currency}</p>
+                                  {selectedReceipt.currency !== settings.currency && (
+                                      <p className="text-xs text-zinc-500 mt-1">≈ {(selectedReceipt.amount * getRate(selectedReceipt.currency)).toFixed(2)} {settings.currency}</p>
+                                  )}
+                              </div>
+                              <div className="bg-black/30 p-4 rounded-xl border border-zinc-800">
+                                  <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">VAT / Tax</span>
+                                  <p className="text-2xl font-mono font-bold text-zinc-300 mt-1">{selectedReceipt.vatAmount ? selectedReceipt.vatAmount.toFixed(2) : '0.00'}</p>
+                              </div>
+                          </div>
+
+                          <div>
+                              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Description</h3>
+                              <p className="text-zinc-200 text-sm leading-relaxed bg-white/5 p-4 rounded-xl border border-white/5">
+                                  {selectedReceipt.description || "No description available."}
+                              </p>
+                          </div>
+
+                          <div>
+                              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Tags & Metadata</h3>
+                              <div className="flex flex-wrap gap-2">
+                                  {selectedReceipt.tags?.map(tag => (
+                                      <span key={tag} className="text-xs bg-indigo-500/10 text-indigo-300 px-3 py-1.5 rounded-lg border border-indigo-500/20">{tag}</span>
+                                  ))}
+                                  {selectedReceipt.taxDeductible && (
+                                      <span className="text-xs bg-emerald-500/10 text-emerald-300 px-3 py-1.5 rounded-lg border border-emerald-500/20 flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Tax Deductible</span>
+                                  )}
+                              </div>
+                          </div>
+                          
+                          {selectedReceipt.notes && (
+                              <div>
+                                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Notes</h3>
+                                  <p className="text-sm text-zinc-400 italic">{selectedReceipt.notes}</p>
+                              </div>
+                          )}
+                      </div>
+                      
+                      <div className="p-6 border-t border-zinc-800 bg-black/20">
+                          <button onClick={() => setSelectedReceipt(null)} className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-medium transition-colors">Close Details</button>
+                      </div>
+                  </div>
+              </div>
           </div>
       )}
 
@@ -557,14 +730,21 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
             </div>
 
             <div className="lg:col-span-8 flex flex-col gap-8">
-                 {/* Chart */}
+                 {/* Chart - Dual Axis for Count and Amount */}
                  <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl p-6 h-64 shadow-xl">
                     <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={chartData}>
+                        <ComposedChart data={chartData}>
                             <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#71717a', fontSize: 12}} dy={10} />
-                            <Tooltip cursor={{fill: 'rgba(255,255,255,0.05)'}} contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a', borderRadius: '8px', color: '#fff'}} />
-                            <Bar dataKey="value" fill="#6366f1" radius={[6,6,0,0]} barSize={40} />
-                        </BarChart>
+                            <YAxis yAxisId="left" hide />
+                            <YAxis yAxisId="right" orientation="right" hide />
+                            <Tooltip 
+                                cursor={{fill: 'rgba(255,255,255,0.05)'}} 
+                                contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a', borderRadius: '8px', color: '#fff'}} 
+                                formatter={(value:any, name:any) => [name === 'count' ? value : `${value.toFixed(0)} ${settings.currency}`, name === 'count' ? 'Items' : 'Total']}
+                            />
+                            <Bar yAxisId="left" dataKey="value" fill="#6366f1" radius={[6,6,0,0]} barSize={40} name="amount" />
+                            <Line yAxisId="right" type="monotone" dataKey="count" stroke="#10b981" strokeWidth={2} dot={{fill: '#10b981', r: 3}} name="count" />
+                        </ComposedChart>
                     </ResponsiveContainer>
                  </div>
                  
@@ -594,7 +774,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                          {columns.filter(c=>c.visible).map(c => (
                                              <td key={c.id} className="p-4">
                                                  {c.id === 'amount' ? <span className="text-white font-mono font-medium">{r.amount.toFixed(2)} {r.currency}</span> : 
-                                                  c.id === 'link' ? (r.sourceUrl && r.sourceUrl !== 'Upload' ? <span className="text-zinc-500 text-xs flex items-center gap-1" title={r.sourceUrl}><ExternalLink className="w-3 h-3" /> {r.sourceUrl.split('/').pop()?.slice(0, 10)}...</span> : '-') :
+                                                  c.id === 'link' ? <button onClick={() => setSelectedReceipt(r)} className="text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 p-1.5 rounded-lg border border-indigo-500/20"><Eye className="w-3.5 h-3.5" /></button> :
                                                   c.id === 'actions' ? <button onClick={() => onRemoveReceipt && onRemoveReceipt(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button> :
                                                   String(r[c.id as keyof ReceiptData] || '')}
                                              </td>
@@ -611,77 +791,124 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
 
       {activeTab === 'reconciliation' && (
           <div className="flex flex-col h-full gap-8 animate-in fade-in slide-in-from-right-4 duration-500 relative">
-              {/* Reconciliation Charts */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-64">
-                   <div className="bg-zinc-900/40 border border-white/5 rounded-3xl p-6 flex flex-col">
-                       <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-4">Reconciliation Progress</h4>
-                       <div className="flex-1">
-                           <ResponsiveContainer width="100%" height="100%">
-                               <PieChart>
-                                   <Pie 
-                                      data={[
-                                          { name: 'Matched', value: reconciliationStats.matched },
-                                          { name: 'Unmatched', value: reconciliationStats.missing + reconciliationStats.unreconciled }
-                                      ]}
-                                      innerRadius={40} outerRadius={60} paddingAngle={5} dataKey="value"
-                                   >
-                                       <Cell fill="#10b981" />
-                                       <Cell fill="#f43f5e" />
-                                   </Pie>
-                                   <Tooltip contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a', borderRadius: '8px', color: '#fff'}} itemStyle={{fontSize:'12px'}} />
-                                   <Legend verticalAlign="bottom" height={36} />
-                               </PieChart>
-                           </ResponsiveContainer>
-                       </div>
-                   </div>
-                   <div className="bg-zinc-900/40 border border-white/5 rounded-3xl p-6 flex flex-col">
-                       <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-4">Match Source</h4>
-                       <div className="flex-1">
-                           <ResponsiveContainer width="100%" height="100%">
-                               <BarChart data={[
-                                   { name: 'Exact', value: reconciliationStats.exactMatches },
-                                   { name: 'AI', value: reconciliationStats.aiMatches },
-                                   { name: 'Manual', value: reconciliationStats.manualMatches }
-                               ]}>
-                                   <XAxis dataKey="name" tick={{fill:'#71717a', fontSize:10}} axisLine={false} tickLine={false} />
-                                   <Tooltip cursor={{fill:'transparent'}} contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a', borderRadius: '8px', color: '#fff'}} />
-                                   <Bar dataKey="value" radius={[4,4,0,0]}>
-                                       <Cell fill="#10b981" />
-                                       <Cell fill="#a855f7" />
-                                       <Cell fill="#3b82f6" />
-                                   </Bar>
-                               </BarChart>
-                           </ResponsiveContainer>
-                       </div>
-                   </div>
-                   <div className="bg-zinc-900/40 border border-white/5 rounded-3xl p-6 flex flex-col justify-center gap-4">
-                       <div className="flex justify-between items-end border-b border-white/5 pb-2">
-                           <span className="text-zinc-400 text-sm">Matched Value</span>
-                           <span className="text-emerald-400 font-mono text-xl font-bold">${reconciliationStats.matchedAmount.toFixed(0)}</span>
-                       </div>
-                       <div className="flex justify-between items-end border-b border-white/5 pb-2">
-                           <span className="text-zinc-400 text-sm">Missing Docs Value</span>
-                           <span className="text-rose-400 font-mono text-xl font-bold">${reconciliationStats.unmatchedAmount.toFixed(0)}</span>
-                       </div>
-                   </div>
+              {/* RECONCILIATION CONTROL CENTER (Enhanced Dashboard) */}
+              <div className="bg-zinc-900/60 border border-white/5 rounded-3xl p-6 shadow-xl relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-32 bg-indigo-500/5 blur-[100px] rounded-full pointer-events-none" />
+                  
+                  <div className="flex flex-col lg:flex-row gap-8 relative z-10">
+                      {/* Left: Input & Status */}
+                      <div className="flex-1 space-y-6">
+                          <div>
+                              <h3 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                                  Reconciliation Hub
+                                  {isBankAnalyzing && <span className="text-xs bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full animate-pulse border border-indigo-500/30">Processing...</span>}
+                              </h3>
+                              <p className="text-zinc-400 text-sm mt-1">
+                                  {bankTransactions.length > 0 
+                                    ? `Loaded ${bankTransactions.length} transactions. Ready to reconcile.` 
+                                    : "Upload a bank statement to begin matching."}
+                              </p>
+                          </div>
+                          
+                          <div className="flex gap-3">
+                               <button 
+                                    onClick={() => bankInputRef.current?.click()} 
+                                    disabled={isBankAnalyzing}
+                                    className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-white bg-emerald-600/90 hover:bg-emerald-500 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+                                >
+                                    {isBankAnalyzing ? <Loader2 className="w-4 h-4 animate-spin"/> : <Upload className="w-4 h-4"/>}
+                                    {isBankAnalyzing ? "Analyzing Feed..." : "Upload Bank Feed"}
+                               </button>
+                               <input type="file" ref={bankInputRef} className="hidden" onChange={async (e) => {
+                                     const f = e.target.files?.[0];
+                                     if(f) {
+                                         setIsBankAnalyzing(true);
+                                         const reader = new FileReader();
+                                         reader.onloadend = async () => {
+                                             try {
+                                                const txs = await parseBankStatement((reader.result as string).split(',')[1], f.type);
+                                                onUpdateBankTransactions(txs.map(t => ({...t, sourceFile: f.name})));
+                                             } catch(e) {
+                                                 alert("Failed to parse bank statement");
+                                             } finally {
+                                                 setIsBankAnalyzing(false);
+                                             }
+                                         }
+                                         reader.readAsDataURL(f);
+                                     }
+                                }} />
+                          </div>
+                      </div>
+
+                      {/* Middle: Visual Stats */}
+                      <div className="flex-[2] grid grid-cols-2 gap-6 border-l border-white/5 pl-6 lg:border-l lg:pl-8">
+                          {/* Count Progress */}
+                          <div className="space-y-3">
+                              <div className="flex justify-between items-end">
+                                  <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Tx Count Match</span>
+                                  <span className="text-xl font-mono font-bold text-white">{reconciliationStats.progressPercent.toFixed(0)}%</span>
+                              </div>
+                              <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
+                                  <div className="h-full bg-indigo-500 transition-all duration-1000" style={{ width: `${reconciliationStats.progressPercent}%` }} />
+                              </div>
+                              <div className="flex justify-between text-[10px] text-zinc-400">
+                                  <span>{reconciliationStats.matched} Matched</span>
+                                  <span>{reconciliationStats.unreconciled} Pending</span>
+                              </div>
+                          </div>
+
+                          {/* Value Progress */}
+                          <div className="space-y-3">
+                              <div className="flex justify-between items-end">
+                                  <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Value Match</span>
+                                  <span className="text-xl font-mono font-bold text-white">{reconciliationStats.valuePercent.toFixed(0)}%</span>
+                              </div>
+                              <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
+                                  <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${reconciliationStats.valuePercent}%` }} />
+                              </div>
+                              <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                                  <span>{reconciliationStats.matchedAmount.toFixed(0)}</span>
+                                  <span className="text-rose-400">-{reconciliationStats.unmatchedAmount.toFixed(0)}</span>
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* Right: Action */}
+                      <div className="flex-1 flex flex-col justify-center items-end border-l border-white/5 pl-6">
+                           <button 
+                                onClick={handleMagicMatch}
+                                disabled={isMagicMatching || bankTransactions.length === 0}
+                                className={`w-full py-4 rounded-xl font-bold text-sm shadow-xl flex items-center justify-center gap-2 transition-all ${
+                                    bankTransactions.length > 0 && receipts.length > 0 
+                                    ? 'bg-indigo-600 hover:bg-indigo-500 text-white animate-pulse-slow' 
+                                    : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                                }`}
+                            >
+                                {isMagicMatching ? <Loader2 className="w-5 h-5 animate-spin"/> : <Wand2 className="w-5 h-5" />}
+                                {isMagicMatching ? "Reconciling..." : "Run Auto-Reconcile"}
+                            </button>
+                            <p className="text-[10px] text-zinc-500 mt-2 text-center w-full">
+                                Requires Bank Feed & Receipts
+                            </p>
+                      </div>
+                  </div>
               </div>
               
               {/* Toolbar */}
               <div className="flex justify-between items-center bg-zinc-900/30 p-2 rounded-2xl border border-white/5 backdrop-blur-md">
                    <div className="flex gap-2">
                        <div className="bg-black/40 p-1 rounded-xl border border-white/5 flex gap-1">
-                           <button onClick={() => setReconcileView('split')} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${reconcileView === 'split' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}><SplitSquareVertical className="w-4 h-4" /> Split View (Manual)</button>
+                           <button onClick={() => setReconcileView('split')} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${reconcileView === 'split' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}><SplitSquareVertical className="w-4 h-4" /> Split View</button>
                            <button onClick={() => setReconcileView('unified')} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${reconcileView === 'unified' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}><Table className="w-4 h-4" /> Unified Report</button>
                        </div>
-                   </div>
-                   
-                   <div className="flex gap-2">
-                       <button onClick={findProgrammaticMatches} className="px-4 py-2 bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600/30 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-2">
-                            <Zap className="w-3 h-3" /> Exact Match
-                       </button>
-                       <button onClick={handleMagicMatch} disabled={isMagicMatching} className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600/30 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-2">
-                            {isMagicMatching ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3" />} AI Match
-                       </button>
+                       
+                       <div className="h-8 w-px bg-white/10 mx-2"></div>
+
+                        <div className="flex bg-black/40 p-1 rounded-xl border border-white/5 gap-1">
+                           <button onClick={() => setReconcileFilter('all')} className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${reconcileFilter === 'all' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>All</button>
+                           <button onClick={() => setReconcileFilter('unmatched')} className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${reconcileFilter === 'unmatched' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Unmatched</button>
+                           <button onClick={() => setReconcileFilter('matched')} className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${reconcileFilter === 'matched' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Matched</button>
+                        </div>
                    </div>
               </div>
 
@@ -692,19 +919,20 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                       <div className="flex-1 bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl flex flex-col overflow-hidden shadow-2xl">
                           <div className="p-4 border-b border-white/5 flex justify-between items-center bg-white/5">
                               <h3 className="font-semibold text-white flex items-center gap-2"><ArrowRight className="w-4 h-4 text-emerald-400" /> Bank Feed</h3>
-                              <div className="flex gap-2">
-                                 <button onClick={() => bankInputRef.current?.click()} className="p-1.5 text-zinc-400 hover:text-white bg-zinc-800 rounded-lg transition-colors hover:bg-zinc-700"><Upload className="w-4 h-4"/></button>
-                                 <input type="file" ref={bankInputRef} className="hidden" onChange={async (e) => {
-                                     const f = e.target.files?.[0];
-                                     if(f) {
-                                         const reader = new FileReader();
-                                         reader.onloadend = async () => setBankTransactions(await parseBankStatement((reader.result as string).split(',')[1], f.type));
-                                         reader.readAsDataURL(f);
-                                     }
-                                }} />
-                              </div>
                           </div>
                           <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                              {bankTransactions.length === 0 && !isBankAnalyzing && (
+                                  <div className="text-center p-10 text-zinc-500">
+                                      <FileSpreadsheet className="w-10 h-10 mx-auto mb-3 opacity-20"/>
+                                      <p>No transactions yet</p>
+                                  </div>
+                              )}
+                              {isBankAnalyzing && (
+                                  <div className="flex flex-col items-center justify-center h-40 gap-4">
+                                      <Loader2 className="w-8 h-8 animate-spin text-emerald-500"/>
+                                      <p className="text-emerald-400 text-sm animate-pulse">Analyzing Bank Statement...</p>
+                                  </div>
+                              )}
                               {filteredBankTx.map(tx => (
                                   <div key={tx.id} className={`p-4 rounded-xl border flex gap-3 transition-all ${tx.matchedReceiptId ? 'bg-emerald-900/5 border-emerald-500/20 opacity-60' : 'bg-black/40 border-white/5'}`}>
                                       {!tx.matchedReceiptId && (
@@ -716,10 +944,13 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                           <div className="flex justify-between items-start">
                                               <div>
                                                   <p className="text-zinc-200 text-sm font-semibold">{tx.description}</p>
-                                                  <p className="text-zinc-500 text-xs font-mono mt-1">{tx.date}</p>
+                                                  <div className="flex gap-3 text-xs mt-1">
+                                                      <span className="text-zinc-500 font-mono">{tx.date}</span>
+                                                      {tx.sourceFile && <span className="text-zinc-600 truncate max-w-[100px]" title={tx.sourceFile}>{tx.sourceFile}</span>}
+                                                  </div>
                                               </div>
                                               <div className="text-right">
-                                                  <p className={`font-mono text-sm font-bold ${tx.amount > 0 ? 'text-emerald-400' : 'text-white'}`}>{tx.amount.toFixed(2)}</p>
+                                                  <p className={`font-mono text-sm font-bold ${tx.amount > 0 ? 'text-emerald-400' : 'text-white'}`}>{tx.amount.toFixed(2)} {tx.currency}</p>
                                                   {renderMatchBadge(tx.matchType)}
                                               </div>
                                           </div>
@@ -756,11 +987,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                               </div>
                                               <div className="text-right">
                                                   <p className="text-white font-mono text-sm font-bold">{r.amount.toFixed(2)} {r.currency}</p>
-                                                  {r.sourceUrl && r.sourceUrl !== 'Upload' && (
-                                                      <a href={r.sourceUrl} target="_blank" rel="noreferrer" className="text-xs text-indigo-400 hover:underline flex items-center gap-1 justify-end">
-                                                          <ExternalLink className="w-3 h-3"/> View
-                                                      </a>
-                                                  )}
+                                                  <button onClick={() => setSelectedReceipt(r)} className="text-[10px] text-indigo-400 hover:text-indigo-300 hover:underline mt-1">View Details</button>
                                               </div>
                                           </div>
                                       </div>
@@ -792,13 +1019,13 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                               <thead className="bg-zinc-900/90 text-zinc-500 sticky top-0 z-10 font-bold uppercase text-xs tracking-wider backdrop-blur-md shadow-sm">
                                   <tr>
                                       <th className="p-4 border-b border-white/5">Status</th>
-                                      <th className="p-4 border-b border-white/5 bg-zinc-900/50">Bank Date</th>
-                                      <th className="p-4 border-b border-white/5 bg-zinc-900/50">Description</th>
-                                      <th className="p-4 border-b border-white/5 bg-zinc-900/50 text-right">Amount</th>
-                                      <th className="p-4 border-b border-white/5 border-l border-white/5 bg-indigo-900/10 text-indigo-300/70">Vendor</th>
-                                      <th className="p-4 border-b border-white/5 bg-indigo-900/10 text-indigo-300/70 text-right">Amount</th>
+                                      <th className="p-4 border-b border-white/5 bg-zinc-900/50">Date</th>
+                                      <th className="p-4 border-b border-white/5 bg-zinc-900/50">Bank Desc</th>
+                                      <th className="p-4 border-b border-white/5 bg-zinc-900/50 text-right">Bank Amt</th>
+                                      <th className="p-4 border-b border-white/5 border-l border-white/5 bg-indigo-900/10 text-indigo-300/70">Receipt</th>
+                                      <th className="p-4 border-b border-white/5 bg-indigo-900/10 text-indigo-300/70 text-right">Rcpt Amt</th>
                                       <th className="p-4 border-b border-white/5 border-l border-white/5 text-right">Variance</th>
-                                      <th className="p-4 border-b border-white/5 w-10">Doc</th>
+                                      <th className="p-4 border-b border-white/5 w-24">Source</th>
                                   </tr>
                               </thead>
                               <tbody className="divide-y divide-white/5">
@@ -808,15 +1035,16 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                               <div className="flex flex-col items-center gap-1">
                                                 {row.status === 'MATCHED' && <ShieldCheck className="w-4 h-4 text-emerald-400" />}
                                                 {row.status === 'MISSING_RECEIPT' && <AlertCircle className="w-4 h-4 text-rose-400" />}
+                                                {row.status === 'INCOME' && <Plus className="w-4 h-4 text-indigo-400" />}
                                                 {row.matchType && renderMatchBadge(row.matchType)}
                                               </div>
                                           </td>
                                           <td className="p-4 bg-zinc-900/20 font-mono text-zinc-400 text-xs">{row.date}</td>
                                           <td className="p-4 bg-zinc-900/20 text-zinc-300 max-w-[200px] truncate font-medium" title={row.bankDesc}>{row.bankDesc || '-'}</td>
-                                          <td className="p-4 bg-zinc-900/20 text-right font-mono text-zinc-300">{row.bankAmount ? row.bankAmount.toFixed(2) : '-'}</td>
+                                          <td className="p-4 bg-zinc-900/20 text-right font-mono text-zinc-300">{row.bankAmount ? row.bankAmount.toFixed(2) : '-'} <span className="text-[10px] text-zinc-600">{row.bankCurrency}</span></td>
                                           
                                           <td className="p-4 border-l border-white/5 bg-indigo-900/5 text-indigo-200 font-medium">{row.receiptVendor || '-'}</td>
-                                          <td className="p-4 bg-indigo-900/5 text-right font-mono text-indigo-200">{row.receiptAmount ? row.receiptAmount.toFixed(2) : '-'}</td>
+                                          <td className="p-4 bg-indigo-900/5 text-right font-mono text-indigo-200">{row.receiptAmount ? row.receiptAmount.toFixed(2) : '-'} <span className="text-[10px] text-indigo-300/50">{row.receiptCurrency}</span></td>
                                           
                                           <td className="p-4 border-l border-white/5 text-right font-mono font-bold">
                                               {row.variance && parseFloat(row.variance) !== 0 ? (
@@ -826,12 +1054,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({ receipts, onAddRec
                                               ) : '-'}
                                           </td>
                                           
-                                          <td className="p-4 text-center">
-                                              {row.sourceUrl && row.sourceUrl !== 'Upload' && (
-                                                  <a href={row.sourceUrl} target="_blank" rel="noreferrer" className="text-zinc-500 hover:text-indigo-400 transition-colors inline-block p-1">
-                                                      <ExternalLink className="w-3.5 h-3.5" />
-                                                  </a>
-                                              )}
+                                          <td className="p-4 text-xs text-zinc-600 truncate max-w-[100px]" title={row.bankSource}>
+                                              {row.bankSource || '-'}
                                           </td>
                                       </tr>
                                   ))}
