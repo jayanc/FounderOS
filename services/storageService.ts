@@ -14,7 +14,7 @@ const STORAGE_KEYS = {
 class StorageService {
     private provider: StorageProviderType = 'LOCAL';
     private userEmail: string = '';
-    private saveQueue: Map<string, NodeJS.Timeout> = new Map();
+    private saveQueue: Map<string, ReturnType<typeof setTimeout>> = new Map();
     private _deviceTier: DeviceTier = 'Mid-Range';
 
     constructor() {
