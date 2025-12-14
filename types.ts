@@ -251,11 +251,24 @@ export interface GrowthPlan {
     name: string;
     currency: string;
     startingCash: number;
-    currentRevenue: number;
-    growthRate: number;
-    monthlyBurn: number;
-    hiringBudget: number;
     createdAt: string;
+
+    // Consulting Stream
+    consultingRevenue: number; // Monthly Base
+    consultingGrowth: number; // MoM %
+    billableHeadcount: number;
+    avgHourlyRate: number;
+    utilization: number; // %
+
+    // Product/Marketplace Stream
+    productRevenue: number; // MRR
+    productGrowth: number; // MoM %
+    cloudCostPercent: number; // % of Rev (Inference/Compute)
+
+    // OpEx
+    fixedOpEx: number; // Office, Legal, Tools
+    marketingBudget: number;
+    salaryPerHead: number; // Avg cost per employee
 }
 
 export interface InvoiceLineItem {
