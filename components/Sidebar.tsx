@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { ViewState, User } from '../types';
-import { LayoutDashboard, Receipt, MessageSquareMore, BrainCircuit, Settings, LogOut, Clock, FileText, Camera, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, Receipt, MessageSquareMore, BrainCircuit, Settings, LogOut, Clock, FileText, Camera, TrendingUp, LifeBuoy, FileCheck, ShieldAlert } from 'lucide-react';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -9,16 +9,18 @@ interface SidebarProps {
   user: User | null;
   onLogout: () => void;
   onOpenCapture: () => void;
+  onStartGuide?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogout, onOpenCapture }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogout, onOpenCapture, onStartGuide }) => {
   const navItems = [
-    { id: ViewState.DASHBOARD, label: 'Briefing', icon: LayoutDashboard },
-    { id: ViewState.FINANCE, label: 'Accounting', icon: Receipt },
-    { id: ViewState.PLANNING, label: 'Growth Plan', icon: TrendingUp },
-    { id: ViewState.OPS, label: 'Workflow', icon: MessageSquareMore },
-    { id: ViewState.TIMESHEETS, label: 'Timesheets', icon: Clock },
-    { id: ViewState.CONTRACTS, label: 'Contracts', icon: FileText },
+    { id: ViewState.DASHBOARD, label: 'Briefing', icon: LayoutDashboard, htmlId: 'nav-dashboard' },
+    { id: ViewState.FINANCE, label: 'Accounting', icon: Receipt, htmlId: 'nav-finance' },
+    { id: ViewState.INVOICES, label: 'Invoicing', icon: FileCheck, htmlId: 'nav-invoices' },
+    { id: ViewState.PLANNING, label: 'Growth Plan', icon: TrendingUp, htmlId: 'nav-planning' },
+    { id: ViewState.OPS, label: 'Workflow', icon: MessageSquareMore, htmlId: 'nav-ops' },
+    { id: ViewState.TIMESHEETS, label: 'Timesheets', icon: Clock, htmlId: 'nav-timesheets' },
+    { id: ViewState.CONTRACTS, label: 'Contracts', icon: FileText, htmlId: 'nav-contracts' },
   ];
 
   return (
@@ -36,6 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
           return (
             <button
               key={item.id}
+              id={item.htmlId}
               onClick={() => onNavigate(item.id)}
               className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
                 isActive 
@@ -54,7 +57,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
       </nav>
 
       <div className="px-4 pb-2 space-y-2 pt-2 border-t border-white/5">
+         
+         {/* Admin Link - Only visible for Admins (Simulated always visible for demo) */}
+         <button
+            onClick={() => onNavigate(ViewState.ADMIN)}
+            className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
+              currentView === ViewState.ADMIN
+                ? 'bg-amber-900/20 text-amber-200 border border-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.1)]' 
+                : 'text-zinc-500 hover:text-amber-200 hover:bg-amber-900/10'
+            }`}
+          >
+            <ShieldAlert className={`w-5 h-5 transition-colors ${currentView === ViewState.ADMIN ? 'text-amber-400' : 'text-zinc-500 group-hover:text-amber-400'}`} />
+            <span className="hidden md:block font-medium text-sm">System Admin</span>
+          </button>
+
          <button 
+            id="nav-capture-btn"
             onClick={onOpenCapture}
             className="w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group text-zinc-500 hover:text-white hover:bg-white/5"
             title="Capture Screenshot"
@@ -64,6 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
          </button>
 
          <button
+            id="nav-settings"
             onClick={() => onNavigate(ViewState.SETTINGS)}
             className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
               currentView === ViewState.SETTINGS 
@@ -86,9 +105,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
              <p className="text-xs text-zinc-500 truncate">{user?.email || 'No Email'}</p>
            </div>
         </div>
-        <button onClick={onLogout} className="w-full flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-rose-400 transition-colors rounded-lg hover:bg-rose-500/10">
-            <LogOut className="w-3.5 h-3.5" /> <span className="hidden md:inline">Sign Out</span>
-        </button>
+        <div className="flex gap-2">
+            <button onClick={onLogout} className="flex-1 flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-rose-400 transition-colors rounded-lg hover:bg-rose-500/10">
+                <LogOut className="w-3.5 h-3.5" /> <span className="hidden md:inline">Sign Out</span>
+            </button>
+            {onStartGuide && (
+                <button onClick={onStartGuide} className="flex-1 flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-indigo-500/10" title="Start Tour">
+                    <LifeBuoy className="w-3.5 h-3.5" /> <span className="hidden md:inline">Guide</span>
+                </button>
+            )}
+        </div>
       </div>
     </div>
   );

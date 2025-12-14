@@ -3,6 +3,7 @@ import React, { useState, useRef, useMemo } from 'react';
 import { ActionItem, CalendarEvent, IntegrationAccount, ReceiptData } from '../types';
 import { extractActionItems, extractActionItemsFromFile, fetchMockInbox, analyzeInbox } from '../services/geminiService';
 import { MessageSquare, CheckSquare, Clock, Zap, Loader2, Paperclip, X, FileText, Mail, Calendar, Plane, MapPin, Trash2, RefreshCw, CloudLightning, Check, AlertOctagon, Plus, Link as LinkIcon, HardDrive, Replace, Search, ArrowRight } from 'lucide-react';
+import { ProcessingStatus } from './ProcessingStatus';
 
 interface OpsModuleProps {
   tasks: ActionItem[];
@@ -202,6 +203,9 @@ export const OpsModule: React.FC<OpsModuleProps> = ({ tasks, events, onAddTasks,
 
   return (
     <div className="flex flex-col h-full gap-8">
+       <ProcessingStatus isProcessing={isProcessing} taskName="Extracting Action Items" mode="CLOUD" />
+       <ProcessingStatus isProcessing={isSyncing} taskName="Syncing Integrations" mode="CLOUD" />
+
        <header className="flex justify-between items-end border-b border-white/5 pb-6">
         <div>
             <h2 className="text-3xl font-bold text-white tracking-tight">Workflow Synthesis</h2>

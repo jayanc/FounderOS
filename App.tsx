@@ -7,6 +7,7 @@ import { ViewState, ReceiptData, ActionItem, CalendarEvent, IntegrationAccount, 
 import { storageService } from './services/storageService';
 import { Loader2, HardDrive, Cpu } from 'lucide-react';
 import { CaptureTool } from './components/CaptureTool';
+import { OnboardingGuide } from './components/OnboardingGuide'; // Import Guide
 import { analyzeReceipt } from './services/geminiService';
 
 // Lazy Load Heavy Modules to optimize initial bundle size
@@ -16,6 +17,8 @@ const ConnectAccounts = React.lazy(() => import('./components/ConnectAccounts').
 const TimesheetModule = React.lazy(() => import('./components/TimesheetModule').then(module => ({ default: module.TimesheetModule })));
 const ContractModule = React.lazy(() => import('./components/ContractModule').then(module => ({ default: module.ContractModule })));
 const PlanningModule = React.lazy(() => import('./components/PlanningModule').then(module => ({ default: module.PlanningModule })));
+const InvoicingModule = React.lazy(() => import('./components/InvoicingModule').then(module => ({ default: module.InvoicingModule })));
+const AdminModule = React.lazy(() => import('./components/AdminModule').then(module => ({ default: module.AdminModule })));
 
 const STORAGE_KEYS = {
     USER: 'founder_os_user',
@@ -52,6 +55,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>(ViewState.DASHBOARD);
   const [isCaptureOpen, setIsCaptureOpen] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   
   // Data State
   const [receipts, setReceipts] = useState<ReceiptData[]>([]);
@@ -71,6 +75,8 @@ const App: React.FC = () => {
       const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
       if (savedUser) {
           const parsedUser = JSON.parse(savedUser);
+          // Auto-grant Admin role for demo purposes if missing
+          if (!parsedUser.role) parsedUser.role = 'Admin';
           setUser(parsedUser);
           storageService.configure(parsedUser);
       }
@@ -131,9 +137,11 @@ const App: React.FC = () => {
 
   // Auth Handlers
   const handleLogin = (authenticatedUser: User) => {
-      setUser(authenticatedUser);
-      storageService.configure(authenticatedUser);
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(authenticatedUser));
+      // Auto-grant Admin role for demo
+      const userWithRole = { ...authenticatedUser, role: 'Admin' as const };
+      setUser(userWithRole);
+      storageService.configure(userWithRole);
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userWithRole));
   };
 
   const handleLogout = () => {
@@ -167,6 +175,15 @@ const App: React.FC = () => {
       localStorage.removeItem(STORAGE_KEYS.SETTINGS);
       
       updateStats();
+  };
+
+  // Guide Handlers
+  const handleCloseGuide = () => {
+      setShowGuide(false);
+  };
+
+  const handleStartGuide = () => {
+      setShowGuide(true);
   };
 
   // Optimized Data Actions with Callback Stability (though setState is stable)
@@ -225,6 +242,8 @@ const App: React.FC = () => {
                 onUpdateSettings={setSettings}
             />
         );
+      case ViewState.INVOICES:
+        return <InvoicingModule settings={settings} onOpenCapture={openCapture} />;
       case ViewState.OPS:
         return (
           <OpsModule 
@@ -242,7 +261,9 @@ const App: React.FC = () => {
       case ViewState.CONTRACTS:
         return <ContractModule onOpenCapture={openCapture} />;
       case ViewState.PLANNING:
-        return <PlanningModule onOpenCapture={openCapture} />;
+        return <PlanningModule onOpenCapture={openCapture} settings={settings} />;
+      case ViewState.ADMIN:
+        return <AdminModule currentUser={user} settings={settings} userReceipts={receipts} userTasks={tasks} />;
       case ViewState.SETTINGS:
         return (
             <ConnectAccounts 
@@ -274,6 +295,7 @@ const App: React.FC = () => {
         user={user} 
         onLogout={handleLogout} 
         onOpenCapture={openCapture}
+        onStartGuide={handleStartGuide}
       />
       
       <main className="flex-1 p-6 lg:p-10 h-full overflow-y-auto overflow-x-hidden relative z-10 scroll-smooth">
@@ -307,12 +329,19 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Global Capture Tool */}
+      {/* Overlays */}
       <CaptureTool 
         currentView={currentView} 
         isOpen={isCaptureOpen} 
         onClose={() => setIsCaptureOpen(false)}
         onImport={handleCaptureImport}
+      />
+      
+      <OnboardingGuide 
+        isOpen={showGuide} 
+        onClose={handleCloseGuide} 
+        currentView={currentView}
+        onNavigate={setCurrentView}
       />
     </div>
   );

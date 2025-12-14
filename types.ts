@@ -1,12 +1,14 @@
 
 export enum ViewState {
   DASHBOARD = 'DASHBOARD',
-  FINANCE = 'FINANCE', // Keeping ID same to preserve routing logic, UI label will change
+  FINANCE = 'FINANCE',
   OPS = 'OPS',
   TIMESHEETS = 'TIMESHEETS',
   CONTRACTS = 'CONTRACTS',
   PLANNING = 'PLANNING',
-  SETTINGS = 'SETTINGS'
+  INVOICES = 'INVOICES',
+  SETTINGS = 'SETTINGS',
+  ADMIN = 'ADMIN'
 }
 
 export type IntegrationType = 'Gmail' | 'Outlook' | 'GDrive' | 'Local';
@@ -14,6 +16,8 @@ export type IntegrationType = 'Gmail' | 'Outlook' | 'GDrive' | 'Local';
 export type StorageProviderType = 'LOCAL' | 'GCS';
 
 export type DeviceTier = 'High-End' | 'Mid-Range' | 'Low-End';
+
+export type UserRole = 'Admin' | 'User' | 'Viewer';
 
 export interface StorageStats {
   usageBytes: number;
@@ -34,40 +38,137 @@ export interface User {
   name: string;
   mfaVerified: boolean;
   storageProvider?: StorageProviderType;
+  role?: UserRole;
 }
 
 export interface AppSettings {
   country: string;
   language: string;
-  currency: string; // Reporting Currency Code (e.g. 'USD')
-  exchangeRates: Record<string, number>; // Code -> Multiplier to Reporting Currency
+  currency: string;
+  exchangeRates: Record<string, number>;
+  // Global Branding
+  companyName?: string;
+  companyAddress?: string;
+  logoUrl?: string; // Base64
+  signatureUrl?: string; // Base64
+  defaultInvoiceCountry?: string;
+  defaultInvoiceLanguage?: string;
+  
+  // Business Details (SE)
+  orgNumber?: string;
+  vatNumber?: string;
+  fSkattStatus?: string;
+  
+  // Payment Details
+  bankgiro?: string;
+  plusgiro?: string;
+  swish?: string;
+  iban?: string;
+  bic?: string;
 }
+
+// --- DYNAMIC INVOICE SCHEMA ---
+
+export type FieldType = 'text' | 'date' | 'number' | 'textarea' | 'currency';
+
+export interface DynamicField {
+    id: string;
+    label: string; // The extracted caption (e.g. "Invoice No")
+    defaultValue: string; // Extracted value from sample
+    type: FieldType;
+    placeholder?: string;
+    // Spatial Data for Exact Reconstruction
+    geometry?: {
+        top: number; // Percentage (0-100)
+        left: number; // Percentage (0-100)
+        width?: number; // Percentage (0-100)
+    };
+}
+
+export interface InvoiceStructure {
+    header: DynamicField[]; // Top Right usually (Inv #, Date)
+    company: DynamicField[]; // Top Left (Sender info)
+    client: DynamicField[]; // Middle Left (Bill To)
+    footer: DynamicField[]; // Bottom (Payment terms, notes)
+    itemsColumns: {
+        description: string;
+        quantity: string;
+        price: string;
+        total: string;
+    }; 
+    
+    // Position of the table start
+    itemsTableGeometry?: {
+        top: number; // Y position where ROWS begin (below header)
+        left?: number; // X position of table start
+        width?: number; // Width of table
+        rowHeight?: number; // Approximate height of a row in %
+    };
+
+    // Precise Column X Positions (Percentage 0-100)
+    columnLayout: {
+        descriptionX: number;
+        quantityX: number;
+        priceX: number;
+        totalX: number;
+    };
+    
+    // System Mapping: Which dynamic ID maps to core system logic?
+    systemMapping: {
+        invoiceNumberId?: string;
+        dateId?: string;
+        dueDateId?: string;
+        totalAmountId?: string;
+        currencyId?: string;
+        clientNameId?: string;
+    };
+}
+
+export interface InvoiceTemplate {
+    id: string;
+    name: string;
+    imageData: string; // Base64 Background (Optional use)
+    createdAt: string;
+    
+    // The "Frozen" Schema
+    structure: InvoiceStructure;
+    
+    // Layout Defaults
+    defaults: {
+        useGlobalBranding: boolean;
+        contentTopOffset: number;
+        contentLeftOffset: number;
+        accentColor?: string;
+    };
+}
+
+// ------------------------------
 
 export interface IntegrationAccount {
   id: string;
-  name: string; // Email address or Folder Name
+  name: string;
   provider: IntegrationType;
   isConnected: boolean;
   type: 'Personal' | 'Work';
   lastSynced?: string;
-  apiConfig?: ApiConfig; // Optional real credentials
+  apiConfig?: ApiConfig;
 }
 
 export interface ReceiptData {
   id: string;
   vendor: string;
   amount: number;
-  currency: string; // e.g., SEK, USD
-  vatAmount?: number; // Important for Swedish accounting
+  currency: string;
+  vatAmount?: number;
   date: string;
   category: string;
-  description: string; // Business event description
+  description: string;
   taxDeductible: boolean;
   notes: string;
   imageUrl?: string;
-  sourceUrl?: string; // Reference to GDrive link or Email ID or Local Path
-  matchConfidence: number; // 0-100
-  source?: string; // Display string (e.g. "Gmail", "GDrive")
+  sourceUrl?: string;
+  matchConfidence: number;
+  source?: string;
   tags?: string[];
 }
 
@@ -75,14 +176,14 @@ export interface BankTransaction {
   id: string;
   date: string;
   description: string;
-  amount: number; // Negative for expenses, Positive for income
+  amount: number;
   currency: string;
-  matchedReceiptId?: string; // ID of the receipt if reconciled
+  matchedReceiptId?: string;
   status: 'Reconciled' | 'Unreconciled' | 'Ignored' | 'Pending';
-  matchType?: 'Exact' | 'AI' | 'Manual'; // New field for match origin
+  matchType?: 'Exact' | 'AI' | 'Manual';
   comments?: string;
-  aiSuggestion?: string; // "High confidence match with receipt #123 because..."
-  sourceFile?: string; // Track which statement this came from
+  aiSuggestion?: string;
+  sourceFile?: string;
 }
 
 export interface ActionItem {
@@ -95,14 +196,14 @@ export interface ActionItem {
   status: 'Pending' | 'Done';
   originEmail?: string;
   tags?: string[];
-  attachments?: { name: string, path: string }[]; // Links to Drive or Local
+  attachments?: { name: string, path: string }[];
 }
 
 export interface CalendarEvent {
   id: string;
   title: string;
-  startTime: string; // ISO string
-  endTime: string; // ISO string
+  startTime: string;
+  endTime: string;
   location: string;
   type: 'Meeting' | 'Flight' | 'Hotel' | 'Reminder';
   attendees?: string[];
@@ -131,8 +232,8 @@ export interface ContractData {
   keyConstraints: string[];
   expirationDate?: string;
   parties: string[];
-  sourceUrl?: string; // Path to file
-  imageUrl?: string; // For preview if it's an image
+  sourceUrl?: string;
+  imageUrl?: string;
   uploadDate: string;
   status?: 'Review' | 'Validated';
 }
@@ -140,12 +241,55 @@ export interface ContractData {
 export interface GrowthPlan {
     id: string;
     name: string;
+    currency: string;
     startingCash: number;
     currentRevenue: number;
-    growthRate: number; // MoM %
+    growthRate: number;
     monthlyBurn: number;
-    hiringBudget: number; // Monthly addition
+    hiringBudget: number;
     createdAt: string;
+}
+
+export interface InvoiceLineItem {
+    id: string;
+    itemNo: string;
+    description: string;
+    unitPrice: number;
+    units: number;
+    total: number;
+}
+
+export interface Invoice {
+    id: string;
+    status: 'Draft' | 'Sent' | 'Paid';
+    
+    // Core (Computed from dynamic data for system use)
+    systemInvoiceNumber: string;
+    systemDate: string;
+    systemTotal: number;
+    systemClient: string;
+    currency: string;
+
+    items: InvoiceLineItem[];
+    vatRate: number;
+    
+    // Template Reference
+    templateId: string;
+    templateData?: string; // Snapshot
+    templateStructure?: InvoiceStructure; // Snapshot of schema at creation time
+    
+    // Dynamic Data (Keyed by Field ID)
+    dynamicValues: Record<string, string>;
+    
+    // Layout Overrides
+    contentTopOffset: number;
+    contentLeftOffset: number;
+    
+    // Display & Content
+    fitOnePage?: boolean;
+    headerText?: string;
+    footerText?: string;
+    fontSize?: 'small' | 'medium' | 'large';
 }
 
 export interface Briefing {
@@ -187,7 +331,7 @@ export interface ScreenshotItem {
     id: string;
     timestamp: string;
     view: ViewState;
-    imageData: string; // Base64 JPEG
+    imageData: string;
     label: string;
     sizeBytes: number;
 }

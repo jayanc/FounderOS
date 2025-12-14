@@ -4,6 +4,7 @@ import { Briefing, ReceiptData, ActionItem, User, ViewState, AppSettings } from 
 import { generateDailyBriefing } from '../services/geminiService';
 import { Sparkles, ArrowUpRight, TrendingUp, AlertTriangle, Loader2, Calculator, Receipt, PieChart as PieIcon, Activity, CalendarDays, Wallet, Clock, FileText, ChevronRight } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { ProcessingStatus } from './ProcessingStatus';
 
 interface DashboardProps {
   receipts: ReceiptData[];
@@ -65,6 +66,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
   return (
     <div className="flex flex-col gap-8 w-full animate-in fade-in duration-700">
       
+      <ProcessingStatus isProcessing={loading} taskName="Generating Executive Briefing" mode="CLOUD" />
+
       {/* Hero Section */}
       <div className="flex flex-col md:flex-row justify-between items-end gap-6 pb-2">
         <div>
@@ -100,6 +103,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ receipts, tasks, user, onN
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {/* Total Burn */}
         <div 
+            id="dashboard-kpi"
             onClick={() => onNavigate(ViewState.FINANCE)}
             className="relative group bg-zinc-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-3xl hover:bg-zinc-900/60 transition-all duration-300 cursor-pointer hover:scale-[1.02] active:scale-[0.98] ring-1 ring-inset ring-transparent hover:ring-indigo-500/20"
         >

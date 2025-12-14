@@ -4,6 +4,7 @@ import { ContractData, ContractCategory, ViewState } from '../types';
 import { analyzeContract, queryContractData } from '../services/geminiService';
 import { storageService } from '../services/storageService';
 import { Upload, FileText, Search, Loader2, Calendar, Users, AlertTriangle, MessageSquare, Briefcase, User, Building2, Globe, Eye, X, ZoomIn, CheckCircle2, History, Pencil, Save, Camera } from 'lucide-react';
+import { ProcessingStatus } from './ProcessingStatus';
 
 interface ContractModuleProps {
     onOpenCapture?: () => void;
@@ -114,6 +115,9 @@ export const ContractModule: React.FC<ContractModuleProps> = ({ onOpenCapture })
 
     return (
         <div className="flex flex-col h-full gap-8 relative">
+            <ProcessingStatus isProcessing={isAnalyzing} taskName="Analyzing Contract Clauses" mode="CLOUD" />
+            <ProcessingStatus isProcessing={isQuerying} taskName="Querying Legal Database" mode="CLOUD" />
+
             <header className="flex justify-between items-end border-b border-white/5 pb-6">
                 <div>
                     <h2 className="text-3xl font-bold text-white tracking-tight">Contract Vault</h2>

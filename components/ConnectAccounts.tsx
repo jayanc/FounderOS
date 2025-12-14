@@ -1,7 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { IntegrationAccount, IntegrationType, ApiConfig, ReceiptData, ActionItem, CalendarEvent, AppSettings } from '../types';
-import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning, Globe, DollarSign, Languages } from 'lucide-react';
+import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning, Globe, DollarSign, Languages, FileText, Image as ImageIcon, LayoutTemplate, Loader2, Building2, Stamp, CreditCard } from 'lucide-react';
 import { securityService } from '../services/securityService';
 
 interface ConnectAccountsProps {
@@ -29,6 +29,9 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   const [showApiConfig, setShowApiConfig] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [clientId, setClientId] = useState('');
+
+  const logoRef = useRef<HTMLInputElement>(null);
+  const sigRef = useRef<HTMLInputElement>(null);
 
   const handleToggle = (id: string) => {
     if (!accounts.find(a => a.id === id)?.isConnected) {
@@ -103,6 +106,16 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
       setIsBackingUp(false);
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'logoUrl' | 'signatureUrl') => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onloadend = () => {
+          onUpdateSettings({ ...settings, [field]: reader.result as string });
+      };
+      reader.readAsDataURL(file);
+  };
+
   const getIcon = (provider: string, isConnected: boolean) => {
       const className = `w-6 h-6 ${isConnected ? 'text-green-400' : 'text-zinc-400'}`;
       switch(provider) {
@@ -128,7 +141,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
                   <label className="block text-xs font-medium text-zinc-500 mb-2 flex items-center gap-2">
-                      <Languages className="w-3 h-3" /> Language
+                      <Languages className="w-3 h-3" /> App Language
                   </label>
                   <select 
                       value={settings.language}
@@ -145,7 +158,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
               
               <div>
                   <label className="block text-xs font-medium text-zinc-500 mb-2 flex items-center gap-2">
-                      <Globe className="w-3 h-3" /> Country / Region
+                      <Globe className="w-3 h-3" /> App Country / Region
                   </label>
                   <select 
                       value={settings.country}
@@ -177,6 +190,168 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                       <option value="CAD">CAD ($)</option>
                       <option value="AUD">AUD ($)</option>
                   </select>
+              </div>
+          </div>
+      </div>
+
+      {/* Global Branding Config */}
+      <div>
+          <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
+              <Building2 className="w-5 h-5" /> Company Identity (Global)
+          </h3>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6">
+              <p className="text-xs text-zinc-500">These details will be used by default across your Invoice Templates.</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">Company Name</label>
+                          <input 
+                              type="text"
+                              value={settings.companyName || ''}
+                              onChange={(e) => onUpdateSettings({...settings, companyName: e.target.value})}
+                              placeholder="Acme Corp LLC"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">Company Address</label>
+                          <textarea 
+                              value={settings.companyAddress || ''}
+                              onChange={(e) => onUpdateSettings({...settings, companyAddress: e.target.value})}
+                              placeholder="123 Innovation Dr..."
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 h-24 resize-none"
+                          />
+                      </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                      <div 
+                          onClick={() => logoRef.current?.click()}
+                          className="border border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors overflow-hidden relative h-40 bg-zinc-950"
+                      >
+                          {settings.logoUrl ? (
+                              <img src={settings.logoUrl} alt="Logo" className="w-full h-full object-contain p-4" />
+                          ) : (
+                              <div className="text-center text-zinc-500">
+                                  <ImageIcon className="w-6 h-6 mx-auto mb-2" />
+                                  <span className="text-xs">Upload Global Logo</span>
+                              </div>
+                          )}
+                          <input type="file" ref={logoRef} className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'logoUrl')} />
+                          {settings.logoUrl && <button onClick={(e) => {e.stopPropagation(); onUpdateSettings({...settings, logoUrl: undefined})}} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full text-white"><X className="w-3 h-3"/></button>}
+                      </div>
+
+                      <div 
+                          onClick={() => sigRef.current?.click()}
+                          className="border border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors overflow-hidden relative h-40 bg-zinc-950"
+                      >
+                          {settings.signatureUrl ? (
+                              <img src={settings.signatureUrl} alt="Sig" className="w-full h-full object-contain p-4" />
+                          ) : (
+                              <div className="text-center text-zinc-500">
+                                  <FileText className="w-6 h-6 mx-auto mb-2" />
+                                  <span className="text-xs">Upload Signature</span>
+                              </div>
+                          )}
+                          <input type="file" ref={sigRef} className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'signatureUrl')} />
+                          {settings.signatureUrl && <button onClick={(e) => {e.stopPropagation(); onUpdateSettings({...settings, signatureUrl: undefined})}} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full text-white"><X className="w-3 h-3"/></button>}
+                      </div>
+                  </div>
+              </div>
+
+              {/* Business Registration Details */}
+              <div className="border-t border-zinc-800 pt-6 mt-6">
+                  <h4 className="text-sm font-bold text-white mb-4 flex items-center gap-2"><Stamp className="w-4 h-4 text-indigo-400" /> Business Registration Details</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">Organization Number (Org.nr)</label>
+                          <input 
+                              type="text"
+                              value={settings.orgNumber || ''}
+                              onChange={(e) => onUpdateSettings({...settings, orgNumber: e.target.value})}
+                              placeholder="556000-0000"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">VAT / Moms Reg. Number</label>
+                          <input 
+                              type="text"
+                              value={settings.vatNumber || ''}
+                              onChange={(e) => onUpdateSettings({...settings, vatNumber: e.target.value})}
+                              placeholder="SE556000000001"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">F-skatt Status</label>
+                          <input 
+                              type="text"
+                              value={settings.fSkattStatus || ''}
+                              onChange={(e) => onUpdateSettings({...settings, fSkattStatus: e.target.value})}
+                              placeholder="Godkänd för F-skatt"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                  </div>
+              </div>
+
+              {/* Payment Details */}
+              <div className="border-t border-zinc-800 pt-6 mt-6">
+                  <h4 className="text-sm font-bold text-white mb-4 flex items-center gap-2"><CreditCard className="w-4 h-4 text-emerald-400" /> Payment Details</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">Bankgiro</label>
+                          <input 
+                              type="text"
+                              value={settings.bankgiro || ''}
+                              onChange={(e) => onUpdateSettings({...settings, bankgiro: e.target.value})}
+                              placeholder="123-4567"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">PlusGiro</label>
+                          <input 
+                              type="text"
+                              value={settings.plusgiro || ''}
+                              onChange={(e) => onUpdateSettings({...settings, plusgiro: e.target.value})}
+                              placeholder="12 34 56-7"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">Swish</label>
+                          <input 
+                              type="text"
+                              value={settings.swish || ''}
+                              onChange={(e) => onUpdateSettings({...settings, swish: e.target.value})}
+                              placeholder="123 123 12 12"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          />
+                      </div>
+                      <div className="md:col-span-2">
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">IBAN</label>
+                          <input 
+                              type="text"
+                              value={settings.iban || ''}
+                              onChange={(e) => onUpdateSettings({...settings, iban: e.target.value})}
+                              placeholder="SE00 0000 0000 0000 0000 0000"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-medium text-zinc-500 mb-1">BIC / SWIFT</label>
+                          <input 
+                              type="text"
+                              value={settings.bic || ''}
+                              onChange={(e) => onUpdateSettings({...settings, bic: e.target.value})}
+                              placeholder="BANKSEHH"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                          />
+                      </div>
+                  </div>
               </div>
           </div>
       </div>

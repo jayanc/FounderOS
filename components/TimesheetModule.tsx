@@ -6,6 +6,7 @@ import { storageService } from '../services/storageService';
 import { Upload, FileSpreadsheet, Download, Search, Loader2, Save, Trash2, Clock, CalendarDays, Plus, BarChart3, User, Folder, Layers, Pencil, Check, X, History, FileJson, Filter, Replace, ArrowRight, AlertTriangle, FileWarning, ArrowUpDown, Sparkles, MoreHorizontal, Eraser, CheckSquare, Square, Camera } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, AreaChart, Area, PieChart, Pie, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
+import { ProcessingStatus } from './ProcessingStatus';
 
 // Helper for date formatting
 const formatDate = (dateStr: string) => {
@@ -316,6 +317,9 @@ export const TimesheetModule: React.FC<TimesheetModuleProps> = ({ onOpenCapture 
 
     return (
         <div className="flex flex-col h-full gap-8 relative">
+            <ProcessingStatus isProcessing={isParsing} taskName="Normalizing Timesheet Data" mode="CLOUD" />
+            <ProcessingStatus isProcessing={isQuerying} taskName="Generating Workforce Report" mode="CLOUD" />
+
             <header className="flex justify-between items-end border-b border-white/5 pb-6">
                 <div>
                     <h2 className="text-3xl font-bold text-white tracking-tight">Timesheet Intelligence</h2>

@@ -6,6 +6,7 @@ import { storageService } from '../services/storageService';
 import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square, FileArchive, PlayCircle, Coins } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, ComposedChart, Line } from 'recharts';
 import JSZip from 'jszip';
+import { ProcessingStatus } from './ProcessingStatus';
 
 // Helper to guess mime type
 const getMimeType = (filename: string) => {
@@ -62,6 +63,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{current: number, total: number} | null>(null); // Progress State
   const [statusText, setStatusText] = useState("Analyzing...");
+  const [processingMode, setProcessingMode] = useState<'CLOUD' | 'LOCAL' | 'HYBRID'>('CLOUD');
+  
   const [preview, setPreview] = useState<string | null>(null);
   const [analyzedData, setAnalyzedData] = useState<ReceiptData | null>(null);
   const [showRatesModal, setShowRatesModal] = useState(false);
@@ -107,7 +110,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
 
   // --- MEMOIZED CALCULATIONS ---
 
-  const getRate = (code: string) => settings.exchangeRates[code] || 1;
+  const getRate = useCallback((code: string) => settings.exchangeRates[code] || 1, [settings.exchangeRates]);
 
   const sortedReceipts = useMemo(() => {
     if (!sortConfig) return receipts;
@@ -120,6 +123,13 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
       return 0;
     });
   }, [receipts, sortConfig]);
+
+  const totalLedgerValue = useMemo(() => {
+      return receipts.reduce((acc, r) => {
+          const rate = getRate(r.currency);
+          return acc + (r.amount * rate);
+      }, 0);
+  }, [receipts, getRate]);
 
   const chartData = useMemo(() => {
     return receipts.reduce((acc: any[], r) => {
@@ -136,7 +146,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
       }
       return acc;
     }, []);
-  }, [receipts, settings.exchangeRates]);
+  }, [receipts, settings.exchangeRates, getRate]);
 
   // Enhanced Reconciliation Stats Calculation
   const reconciliationStats = useMemo(() => {
@@ -189,7 +199,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
           progressPercent,
           valuePercent
       };
-  }, [bankTransactions, settings.exchangeRates]);
+  }, [bankTransactions, settings.exchangeRates, getRate]);
 
   const unifiedReportData = useMemo(() => {
       const reportData: any[] = [];
@@ -307,6 +317,10 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
 
   const processFileList = async (files: File[]) => {
       setIsAnalyzing(true);
+      
+      const hasZip = files.some(f => f.name.endsWith('.zip'));
+      setProcessingMode(hasZip ? 'HYBRID' : 'CLOUD');
+      
       setStatusText("Initializing batch...");
       setBatchProgress({ current: 0, total: files.length });
 
@@ -506,6 +520,17 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
   // --- RENDER ---
   return (
     <div className="flex flex-col h-full gap-8">
+      
+      {/* PROCESSING INDICATORS */}
+      <ProcessingStatus 
+        isProcessing={isAnalyzing} 
+        taskName={statusText} 
+        progress={batchProgress && batchProgress.total > 0 ? (batchProgress.current / batchProgress.total) * 100 : undefined} 
+        mode={processingMode}
+      />
+      <ProcessingStatus isProcessing={isBankAnalyzing} taskName="Parsing Bank Statement" mode="CLOUD" />
+      <ProcessingStatus isProcessing={isMagicMatching} taskName="Auto-Reconciling Ledger" mode="CLOUD" />
+
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-white/5 pb-6">
         <div>
             <h2 className="text-3xl font-bold text-white tracking-tight">Accounting</h2>
@@ -782,6 +807,15 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                                      </tr>
                                  ))}
                              </tbody>
+                             {/* Ledger Footer Total */}
+                             <tfoot className="bg-zinc-900/80 backdrop-blur-md border-t border-white/10">
+                                 <tr>
+                                     <td colSpan={columns.filter(c=>c.visible).length} className="p-4 text-right">
+                                         <span className="text-xs text-zinc-500 mr-2 uppercase font-bold tracking-wider">Total Ledger Value:</span>
+                                         <span className="text-white font-mono font-bold text-lg">{totalLedgerValue.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-sm text-zinc-500">{settings.currency}</span></span>
+                                     </td>
+                                 </tr>
+                             </tfoot>
                          </table>
                      </div>
                  </div>
@@ -860,7 +894,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                           {/* Value Progress */}
                           <div className="space-y-3">
                               <div className="flex justify-between items-end">
-                                  <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Value Match</span>
+                                  <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Value Match ({settings.currency})</span>
                                   <span className="text-xl font-mono font-bold text-white">{reconciliationStats.valuePercent.toFixed(0)}%</span>
                               </div>
                               <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">

@@ -1,9 +1,7 @@
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { ReceiptData, ActionItem, InboxAnalysisResult, CalendarEvent, IntegrationAccount, BankTransaction, ReconciliationSuggestion, TimesheetEntry, ContractData } from "../types";
+import { ReceiptData, ActionItem, InboxAnalysisResult, CalendarEvent, IntegrationAccount, BankTransaction, ReconciliationSuggestion, TimesheetEntry, ContractData, InvoiceTemplate } from "../types";
 import JSZip from 'jszip';
 
-// Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const RECEIPT_MODEL = "gemini-2.5-flash";
@@ -11,74 +9,57 @@ const OPS_MODEL = "gemini-2.5-flash";
 const BRIEFING_MODEL = "gemini-2.5-flash"; 
 const CONTRACT_MODEL = "gemini-2.5-flash";
 
-// --- Mock Data ---
-
-const MOCK_EMAILS_DATA = [
-  {
-    accountId: 'personal',
-    content: `From: reservations@hilton.com
-Subject: Booking Confirmation #H8923
-Body: Dear Alex, your stay at Hilton San Francisco Union Square is confirmed. 
-Check-in: 2024-10-15 at 3:00 PM. Check-out: 2024-10-18. 
-Total charged: $845.20 USD. Card ending in 4242.`
-  },
-  {
-    accountId: 'work',
-    content: `From: billing@zoom.us
-Subject: Invoice INV-2023-001
-Body: Thanks for using Zoom! Your monthly subscription for Pro Plan is processed.
-Amount: $15.99 USD
-Date: Oct 24, 2024.
-Tax Deductible: Yes.`
-  },
-  {
-    accountId: 'work',
-    content: `From: sarah@founder.os
-Subject: Q4 Planning Sync
-Body: Hey Alex, can we hop on a call on Oct 25th at 2pm EST to discuss the Q4 roadmap? 
-We need to finalize the hiring plan for engineering.`
-  },
-  {
-    accountId: 'personal',
-    content: `From: united@airlines.com
-Subject: eTicket Itinerary: SFO to NYC
-Body: Flight UA421. Depart SFO Oct 28 08:00 AM. Arrive JFK 04:30 PM.
-Seat 4A. Confirmation: K9J2L.`
-  }
-];
-
-// --- Schema Definitions ---
+// --- Schemas ---
 
 const receiptSchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    vendor: { type: Type.STRING, description: "Name of the merchant or vendor" },
-    amount: { type: Type.NUMBER, description: "Total amount of the transaction" },
-    currency: { type: Type.STRING, description: "Currency code (e.g., SEK, USD, EUR)" },
-    vatAmount: { type: Type.NUMBER, description: "Extracted VAT/Moms amount if present" },
-    date: { type: Type.STRING, description: "Date found on receipt (YYYY-MM-DD)" },
-    category: { type: Type.STRING, description: "Expense category (e.g., Meals, Software, Travel)" },
-    description: { type: Type.STRING, description: "Formal business event description for accounting ledger" },
-    taxDeductible: { type: Type.BOOLEAN, description: "Is this likely a business tax deduction?" },
-    notes: { type: Type.STRING, description: "Additional context" },
-    matchConfidence: { type: Type.NUMBER, description: "Confidence score (0-100) of the extraction" },
-    tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Short labels e.g. #Software, #Travel" }
+    vendor: { type: Type.STRING },
+    amount: { type: Type.NUMBER },
+    currency: { type: Type.STRING },
+    date: { type: Type.STRING },
+    category: { type: Type.STRING },
+    description: { type: Type.STRING },
+    vatAmount: { type: Type.NUMBER },
+    taxDeductible: { type: Type.BOOLEAN },
+    tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+    notes: { type: Type.STRING },
   },
-  required: ["vendor", "amount", "currency", "date", "description"],
+  required: ["vendor", "amount", "date", "description"]
 };
 
-const bankStatementSchema: Schema = {
-  type: Type.ARRAY,
-  items: {
+const actionItemSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    task: { type: Type.STRING },
+    assignee: { type: Type.STRING },
+    deadline: { type: Type.STRING },
+    priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+    tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+  },
+  required: ["task", "priority"]
+};
+
+const calendarEventSchema: Schema = {
     type: Type.OBJECT,
     properties: {
-      date: { type: Type.STRING, description: "Transaction date YYYY-MM-DD" },
-      description: { type: Type.STRING, description: "Transaction description or payee" },
-      amount: { type: Type.NUMBER, description: "Transaction amount (negative for expenses)" },
-      currency: { type: Type.STRING, description: "Currency code" }
+        title: { type: Type.STRING },
+        startTime: { type: Type.STRING },
+        endTime: { type: Type.STRING },
+        location: { type: Type.STRING },
+        type: { type: Type.STRING, enum: ['Meeting', 'Flight', 'Hotel', 'Reminder'] },
+        description: { type: Type.STRING }
     },
-    required: ["date", "description", "amount", "currency"]
-  }
+    required: ["title", "startTime", "type"]
+};
+
+const inboxAnalysisSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    receipts: { type: Type.ARRAY, items: receiptSchema },
+    tasks: { type: Type.ARRAY, items: actionItemSchema },
+    events: { type: Type.ARRAY, items: calendarEventSchema },
+  },
 };
 
 const reconciliationSchema: Schema = {
@@ -89,89 +70,191 @@ const reconciliationSchema: Schema = {
             transactionId: { type: Type.STRING },
             receiptId: { type: Type.STRING },
             confidence: { type: Type.NUMBER },
-            reasoning: { type: Type.STRING, description: "Why this match makes sense despite differences" }
+            reasoning: { type: Type.STRING }
         },
-        required: ["transactionId", "receiptId", "reasoning"]
+        required: ["transactionId", "receiptId", "confidence"]
     }
 };
 
-const actionItemSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    task: { type: Type.STRING, description: "The actionable task" },
-    assignee: { type: Type.STRING, description: "Who is responsible" },
-    deadline: { type: Type.STRING, description: "Extracted or suggested deadline" },
-    priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
-    source: { type: Type.STRING, enum: ["Slack", "Email", "Meeting", "File"] },
-    tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Context tags e.g. #Hiring, #Product" }
-  },
-  required: ["task", "priority"]
-};
-
-const calendarEventSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING },
-    startTime: { type: Type.STRING, description: "ISO date string or YYYY-MM-DD HH:MM" },
-    endTime: { type: Type.STRING, description: "ISO date string" },
-    location: { type: Type.STRING },
-    type: { type: Type.STRING, enum: ['Meeting', 'Flight', 'Hotel', 'Reminder'] },
-    description: { type: Type.STRING }
-  },
-  required: ["title", "startTime", "type"]
-};
-
-const inboxAnalysisSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    receipts: { type: Type.ARRAY, items: receiptSchema },
-    tasks: { type: Type.ARRAY, items: actionItemSchema },
-    events: { type: Type.ARRAY, items: calendarEventSchema }
-  }
+const bankStatementSchema: Schema = {
+    type: Type.ARRAY,
+    items: {
+        type: Type.OBJECT,
+        properties: {
+            date: { type: Type.STRING },
+            description: { type: Type.STRING },
+            amount: { type: Type.NUMBER },
+            currency: { type: Type.STRING }
+        },
+        required: ["date", "description", "amount"]
+    }
 };
 
 const timesheetEntrySchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    date: { type: Type.STRING, description: "YYYY-MM-DD" },
-    employee: { type: Type.STRING },
-    project: { type: Type.STRING },
-    task: { type: Type.STRING },
-    hours: { type: Type.NUMBER },
-    notes: { type: Type.STRING }
-  },
-  required: ["date", "employee", "hours"]
+    type: Type.OBJECT,
+    properties: {
+        date: { type: Type.STRING },
+        employee: { type: Type.STRING },
+        project: { type: Type.STRING },
+        task: { type: Type.STRING },
+        hours: { type: Type.NUMBER },
+    },
+    required: ["date", "hours"]
 };
 
 const contractAnalysisSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    summary: { type: Type.STRING, description: "Brief overview of the contract" },
-    keyConstraints: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of critical constraints, deadlines, or obligations" },
-    expirationDate: { type: Type.STRING, description: "YYYY-MM-DD" },
-    parties: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Names of companies or individuals involved" }
-  },
-  required: ["summary", "keyConstraints", "parties"]
+    type: Type.OBJECT,
+    properties: {
+        summary: { type: Type.STRING },
+        keyConstraints: { type: Type.ARRAY, items: { type: Type.STRING } },
+        expirationDate: { type: Type.STRING },
+        parties: { type: Type.ARRAY, items: { type: Type.STRING } },
+    },
+    required: ["summary", "keyConstraints", "parties"]
 };
 
-// --- Helper for Robust JSON Parsing ---
+const fieldSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+        label: { type: Type.STRING, description: "The extracted label text (e.g. 'Invoice No') - for reference only." },
+        defaultValue: { type: Type.STRING, description: "The value extracted from the sample (e.g. 'INV-001')." },
+        type: { type: Type.STRING, enum: ['text', 'date', 'number', 'textarea', 'currency'] },
+        section: { type: Type.STRING, enum: ['header', 'company', 'client', 'footer'] },
+        geometry: {
+            type: Type.OBJECT,
+            properties: {
+                top: { type: Type.NUMBER, description: "Top Y position of the VALUE ONLY (percentage 0-100)" },
+                left: { type: Type.NUMBER, description: "Left X position of the VALUE ONLY (percentage 0-100)" },
+                width: { type: Type.NUMBER, description: "Width of the value area (percentage 0-100)" }
+            },
+            required: ["top", "left"]
+        }
+    },
+    required: ["label", "type", "section", "geometry"]
+};
+
+const invoiceStructureSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+        templateName: { type: Type.STRING, description: "Suggested name for this template" },
+        allFields: { 
+            type: Type.ARRAY, 
+            items: fieldSchema,
+            description: "List variable fields. CRITICAL: Geometry must cover the VALUE, not the LABEL. We will overlay new text here."
+        },
+        itemsTableHeaders: {
+            type: Type.OBJECT,
+            properties: {
+                description: { type: Type.STRING, description: "Header text for description column" },
+                quantity: { type: Type.STRING, description: "Header text for qty" },
+                price: { type: Type.STRING, description: "Header text for unit price" },
+                total: { type: Type.STRING, description: "Header text for line total" }
+            },
+            required: ["description", "quantity", "price", "total"]
+        },
+        itemsTableTop: { type: Type.NUMBER, description: "The Y position (%) where the table headers END and the first data row begins. The background below this line will be cleared." },
+        itemsTableLeft: { type: Type.NUMBER, description: "Left X position (percentage 0-100)." },
+        itemsTableWidth: { type: Type.NUMBER, description: "Width (percentage 0-100)." },
+        rowHeight: { type: Type.NUMBER, description: "Approximate height of a single row in %." },
+        columnLayout: {
+            type: Type.OBJECT,
+            properties: {
+                descriptionX: { type: Type.NUMBER, description: "X % for Description column start" },
+                quantityX: { type: Type.NUMBER, description: "X % for Quantity column start" },
+                priceX: { type: Type.NUMBER, description: "X % for Price column start" },
+                totalX: { type: Type.NUMBER, description: "X % for Total column start" }
+            },
+            required: ["descriptionX", "quantityX", "priceX", "totalX"]
+        },
+        contentTopOffset: { type: Type.NUMBER },
+        contentLeftOffset: { type: Type.NUMBER }
+    },
+    required: ["templateName", "allFields", "itemsTableHeaders", "itemsTableTop", "columnLayout"]
+};
+
+// Mock Data
+const MOCK_EMAILS_DATA = [
+    { accountId: '1', content: "Subject: Lunch Invoice\nTotal: $25.50\nVendor: Burger King\nDate: 2024-05-01" },
+    { accountId: '2', content: "Subject: Software License\nTotal: $100.00\nVendor: Adobe\nDate: 2024-05-02" }
+];
+
 const safeJSONParse = (text: string) => {
     try {
         const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
         return JSON.parse(cleaned);
     } catch (e) {
         console.error("JSON Parse Error", e);
-        return [];
+        return {};
     }
 };
 
-// --- Service Functions ---
+export const analyzeInvoiceTemplate = async (base64Data: string, mimeType: string): Promise<Partial<InvoiceTemplate>> => {
+    try {
+        const response = await ai.models.generateContent({
+            model: OPS_MODEL,
+            contents: [ // Pass as array
+                {
+                    parts: [
+                        { inlineData: { mimeType, data: base64Data } },
+                        { text: "Analyze this invoice to create a 'Form Filling' template overlay.\n\nInstructions:\n1. **Identify Variable Fields (Red Zones)**: Identify ONLY the values that change (e.g. the actual Date '2024-01-01', the actual Inv# '001', the Client Name). \n2. **Exclude Labels**: Do NOT include static labels (like 'Invoice No:', 'Bill To:', 'Total:') in the geometry. We want to keep the original labels visible on the background image.\n3. **Table Analysis**: Find the Y-position where the *headers end*. This is `itemsTableTop`. We will clear everything below this line to draw new rows, but keep the headers intact.\n4. **Column Mapping**: Identify X-positions for columns." }
+                    ]
+                }
+            ],
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: invoiceStructureSchema,
+                temperature: 0.1
+            }
+        });
+        
+        const parsed = safeJSONParse(response.text || "{}");
+        const allFields = parsed.allFields || [];
+
+        // Fallback
+        if (allFields.length === 0) {
+            allFields.push(
+                { label: "Invoice No", defaultValue: "INV-001", type: "text", section: "header", geometry: { top: 10, left: 70, width: 20 } },
+                { label: "Date", defaultValue: new Date().toISOString().split('T')[0], type: "date", section: "header", geometry: { top: 15, left: 70, width: 20 } },
+                { label: "Bill To", defaultValue: "Client Name", type: "textarea", section: "client", geometry: { top: 20, left: 10, width: 40 } },
+                { label: "Total", defaultValue: "0.00", type: "currency", section: "footer", geometry: { top: 80, left: 70, width: 20 } }
+            );
+        }
+
+        const structure = {
+            header: allFields.filter((f: any) => f.section === 'header').map((f: any) => ({ ...f, id: crypto.randomUUID() })),
+            company: allFields.filter((f: any) => f.section === 'company').map((f: any) => ({ ...f, id: crypto.randomUUID() })),
+            client: allFields.filter((f: any) => f.section === 'client').map((f: any) => ({ ...f, id: crypto.randomUUID() })),
+            footer: allFields.filter((f: any) => f.section === 'footer').map((f: any) => ({ ...f, id: crypto.randomUUID() })),
+            itemsColumns: parsed.itemsTableHeaders || { description: 'Description', quantity: 'Qty', price: 'Price', total: 'Total' },
+            itemsTableGeometry: { 
+                top: parsed.itemsTableTop || 40,
+                left: parsed.itemsTableLeft || 5,
+                width: parsed.itemsTableWidth || 90,
+                rowHeight: parsed.rowHeight || 5
+            },
+            columnLayout: parsed.columnLayout || { descriptionX: 5, quantityX: 50, priceX: 65, totalX: 80 },
+            systemMapping: {} 
+        };
+
+        return {
+            name: parsed.templateName || "New Template",
+            structure: structure as any,
+            defaults: {
+                useGlobalBranding: true,
+                contentTopOffset: parsed.contentTopOffset || 0,
+                contentLeftOffset: parsed.contentLeftOffset || 0,
+            }
+        };
+    } catch (e) {
+        console.error("Template Analysis Error", e);
+        throw e;
+    }
+}
 
 export const suggestMatches = async (
     transactions: BankTransaction[], 
     receipts: ReceiptData[]
 ): Promise<ReconciliationSuggestion[]> => {
-    
     // Only send simplified data to save tokens
     const simpleTxs = transactions.filter(t => !t.matchedReceiptId).map(t => ({ id: t.id, date: t.date, desc: t.description, amt: t.amount }));
     const simpleReceipts = receipts.map(r => ({ id: r.id, date: r.date, vendor: r.vendor, amt: r.amount }));
@@ -368,8 +451,6 @@ export const analyzeReceiptBatch = async (files: File[], onProgress?: (completed
     const results: ReceiptData[] = [];
     let completed = 0;
 
-    // Process in batches of 3 to avoid rate limits if any, though standard Gemini is robust.
-    // For "in one go" feeling, we parallelize.
     const promises = files.map(async (file) => {
         try {
             const buffer = await file.arrayBuffer();
@@ -419,7 +500,6 @@ export const extractReceiptsFromZip = async (zipBuffer: ArrayBuffer, zipName: st
         
         const promises = imageFiles.map(async (file) => {
             try {
-                // Pass full zip path context e.g. "MyReceipts.zip/lunch.jpg"
                 const result = await analyzeReceipt(file.data, file.type, `${zipName}/${file.name}`);
                 completed++;
                 if (onProgress) onProgress(completed, imageFiles.length);
@@ -508,8 +588,6 @@ export const extractActionItemsFromFile = async (base64Data: string, mimeType: s
 };
 
 export const parseTimesheet = async (data: string | object, mimeType: string): Promise<TimesheetEntry[]> => {
-    // If it's a raw object (from Excel/JSON), send it for normalization
-    // If it's base64 (PDF/Image), send as inlineData
     try {
         const contents = (typeof data === 'object' || mimeType === 'application/json')
             ? `Normalize this raw timesheet data into a standard JSON format. Raw Data: ${JSON.stringify(data)}`
