@@ -8,7 +8,8 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const STORAGE_KEYS = {
     ACTIVITY_LOG: 'founder_os_activity_log',
-    SCREENSHOTS: 'founder_os_screenshots'
+    SCREENSHOTS: 'founder_os_screenshots',
+    SYSTEM_USERS: 'founder_os_system_users' // New key for user directory
 };
 
 const MODULE_KEYS = [
@@ -204,6 +205,34 @@ class StorageService {
 
     async clearUserCache(type: string) {
         localStorage.removeItem(type);
+    }
+
+    // --- USER DIRECTORY MANAGEMENT ---
+
+    getSystemUsers(): User[] {
+        const raw = localStorage.getItem(STORAGE_KEYS.SYSTEM_USERS);
+        return raw ? JSON.parse(raw) : [];
+    }
+
+    saveSystemUser(user: User) {
+        const users = this.getSystemUsers();
+        const existingIdx = users.findIndex(u => u.id === user.id || u.email === user.email);
+        
+        if (existingIdx >= 0) {
+            users[existingIdx] = { ...users[existingIdx], ...user };
+        } else {
+            users.push(user);
+        }
+        
+        localStorage.setItem(STORAGE_KEYS.SYSTEM_USERS, JSON.stringify(users));
+        this.logActivity(ViewState.ADMIN, 'CREATE', `Updated system user: ${user.email}`);
+    }
+
+    deleteSystemUser(userId: string) {
+        const users = this.getSystemUsers();
+        const filtered = users.filter(u => u.id !== userId);
+        localStorage.setItem(STORAGE_KEYS.SYSTEM_USERS, JSON.stringify(filtered));
+        this.logActivity(ViewState.ADMIN, 'DELETE', `Deleted system user ID: ${userId}`);
     }
 
     // --- EXPORT / IMPORT CENTRAL ---

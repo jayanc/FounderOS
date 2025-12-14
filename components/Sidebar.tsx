@@ -13,7 +13,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogout, onOpenCapture, onStartGuide }) => {
-  const navItems = [
+  const allNavItems = [
     { id: ViewState.DASHBOARD, label: 'Briefing', icon: LayoutDashboard, htmlId: 'nav-dashboard' },
     { id: ViewState.FINANCE, label: 'Accounting', icon: Receipt, htmlId: 'nav-finance' },
     { id: ViewState.INVOICES, label: 'Invoicing', icon: FileCheck, htmlId: 'nav-invoices' },
@@ -22,6 +22,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
     { id: ViewState.TIMESHEETS, label: 'Timesheets', icon: Clock, htmlId: 'nav-timesheets' },
     { id: ViewState.CONTRACTS, label: 'Contracts', icon: FileText, htmlId: 'nav-contracts' },
   ];
+
+  // Filter based on user permissions
+  // If allowedModules is undefined, assume full access (legacy support)
+  const navItems = allNavItems.filter(item => 
+    !user?.allowedModules || user.allowedModules.includes(item.id)
+  );
+
+  const canAccessAdmin = !user?.allowedModules || user.allowedModules.includes(ViewState.ADMIN) || user?.role === 'Admin';
+  const canAccessSettings = !user?.allowedModules || user.allowedModules.includes(ViewState.SETTINGS);
 
   return (
     <div className="w-20 md:w-64 bg-zinc-900/80 backdrop-blur-md border-r border-white/5 flex flex-col h-full sticky top-0 z-20 shadow-2xl">
@@ -58,18 +67,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
 
       <div className="px-4 pb-2 space-y-2 pt-2 border-t border-white/5">
          
-         {/* Admin Link - Only visible for Admins (Simulated always visible for demo) */}
-         <button
-            onClick={() => onNavigate(ViewState.ADMIN)}
-            className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
-              currentView === ViewState.ADMIN
-                ? 'bg-amber-900/20 text-amber-200 border border-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.1)]' 
-                : 'text-zinc-500 hover:text-amber-200 hover:bg-amber-900/10'
-            }`}
-          >
-            <ShieldAlert className={`w-5 h-5 transition-colors ${currentView === ViewState.ADMIN ? 'text-amber-400' : 'text-zinc-500 group-hover:text-amber-400'}`} />
-            <span className="hidden md:block font-medium text-sm">System Admin</span>
-          </button>
+         {/* Admin Link - Only visible for Admins or Permitted Users */}
+         {canAccessAdmin && (
+             <button
+                onClick={() => onNavigate(ViewState.ADMIN)}
+                className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
+                  currentView === ViewState.ADMIN
+                    ? 'bg-amber-900/20 text-amber-200 border border-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.1)]' 
+                    : 'text-zinc-500 hover:text-amber-200 hover:bg-amber-900/10'
+                }`}
+              >
+                <ShieldAlert className={`w-5 h-5 transition-colors ${currentView === ViewState.ADMIN ? 'text-amber-400' : 'text-zinc-500 group-hover:text-amber-400'}`} />
+                <span className="hidden md:block font-medium text-sm">System Admin</span>
+              </button>
+         )}
 
          <button 
             id="nav-capture-btn"
@@ -81,18 +92,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
              <span className="hidden md:block font-medium text-sm text-emerald-500/80 group-hover:text-emerald-400">Capture View</span>
          </button>
 
-         <button
-            id="nav-settings"
-            onClick={() => onNavigate(ViewState.SETTINGS)}
-            className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
-              currentView === ViewState.SETTINGS 
-                ? 'bg-zinc-800 text-white ring-1 ring-white/10' 
-                : 'text-zinc-500 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Settings className={`w-5 h-5 transition-colors ${currentView === ViewState.SETTINGS ? 'text-indigo-400' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
-            <span className="hidden md:block font-medium text-sm">Settings</span>
-          </button>
+         {canAccessSettings && (
+             <button
+                id="nav-settings"
+                onClick={() => onNavigate(ViewState.SETTINGS)}
+                className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all duration-300 group ${
+                  currentView === ViewState.SETTINGS 
+                    ? 'bg-zinc-800 text-white ring-1 ring-white/10' 
+                    : 'text-zinc-500 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <Settings className={`w-5 h-5 transition-colors ${currentView === ViewState.SETTINGS ? 'text-indigo-400' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
+                <span className="hidden md:block font-medium text-sm">Settings</span>
+              </button>
+         )}
       </div>
 
       <div className="p-4 mt-2 border-t border-white/5 bg-black/20">

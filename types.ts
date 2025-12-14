@@ -34,11 +34,16 @@ export interface ApiConfig {
 }
 
 export interface User {
+  id?: string; // UUID
   email: string;
   name: string;
+  password?: string; // Only used in the Admin Directory for simulation
   mfaVerified: boolean;
   storageProvider?: StorageProviderType;
   role?: UserRole;
+  allowedModules?: ViewState[]; // Access Control List
+  department?: string;
+  lastActive?: string;
 }
 
 export interface AppSettings {
