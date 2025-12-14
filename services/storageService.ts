@@ -1,5 +1,5 @@
 
-import { User, StorageProviderType, StorageStats, DeviceTier, ActivityLogEntry, ViewState, ScreenshotItem } from "../types";
+import { User, StorageProviderType, StorageStats, DeviceTier, ActivityLogEntry, ViewState, ScreenshotItem, AppSettings } from "../types";
 
 // Simulating GCS Bucket Structure
 // gs://founder-os-data/{user_email}/{year}/{month}/{type}.json
@@ -11,11 +11,28 @@ const STORAGE_KEYS = {
     SCREENSHOTS: 'founder_os_screenshots'
 };
 
+const MODULE_KEYS = [
+    'founder_os_receipts',
+    'founder_os_bank_txs',
+    'founder_os_tasks',
+    'founder_os_events',
+    'founder_os_accounts',
+    'founder_os_settings',
+    'founder_os_activity_log',
+    'founder_os_screenshots',
+    'founder_os_timesheets',
+    'founder_os_contracts',
+    'founder_os_plans',
+    'founder_os_invoices',
+    'founder_os_invoice_templates'
+];
+
 class StorageService {
     private provider: StorageProviderType = 'LOCAL';
     private userEmail: string = '';
     private saveQueue: Map<string, ReturnType<typeof setTimeout>> = new Map();
     private _deviceTier: DeviceTier = 'Mid-Range';
+    private gcpConfig: AppSettings['gcpConfig'] | undefined;
 
     constructor() {
         this._deviceTier = this.detectDeviceTier();
@@ -24,6 +41,15 @@ class StorageService {
     configure(user: User) {
         this.provider = user.storageProvider || 'LOCAL';
         this.userEmail = user.email;
+        // Load GCP Config from settings if available
+        const settingsStr = localStorage.getItem('founder_os_settings');
+        if (settingsStr) {
+            const settings: AppSettings = JSON.parse(settingsStr);
+            this.gcpConfig = settings.gcpConfig;
+            if (this.gcpConfig && this.gcpConfig.autoSync) {
+                this.provider = 'GCS';
+            }
+        }
     }
 
     private detectDeviceTier(): DeviceTier {
@@ -44,16 +70,16 @@ class StorageService {
         
         // Partition Key Construction
         if (this.provider === 'GCS') {
-            return `gs://bucket/${this.userEmail}/${year}/${month}/${type}.json`;
+            return `gs://${this.gcpConfig?.bucketName || 'default-bucket'}/${this.userEmail}/${year}/${month}/${type}.json`;
         } else {
             // Local folder simulation (Flattened for localStorage)
-            return `local://${this.userEmail}/data/${type}.json`;
+            return type; // Simplification for localStorage to use direct key
         }
     }
 
     // Debounced Save to prevent UI blocking
     save(type: string, data: any): void {
-        const key = this.getPath(type);
+        const key = type; // Use raw key for localStorage
         const debounceMs = 1000; // Wait 1s of inactivity before writing
 
         // Clear pending write
@@ -71,12 +97,7 @@ class StorageService {
     }
 
     private async performSave(key: string, data: any) {
-        // Simulate Network Latency for GCS (Non-blocking)
-        if (this.provider === 'GCS') {
-            console.log(`[GCS] Uploading background: ${key}...`);
-            await delay(800); 
-        }
-
+        // Always save locally first for offline-first support
         try {
             const payload = JSON.stringify(data);
             localStorage.setItem(key, payload);
@@ -84,28 +105,19 @@ class StorageService {
             // Handle Quota Exceeded gracefully
             if (this.isQuotaError(e)) {
                 console.warn(`[Storage] Quota exceeded for ${key}. Attempting optimization...`);
-                
                 if (Array.isArray(data)) {
                     // Optimization Strategy: Strip large base64 image fields
-                    // This preserves the critical financial/metadata but drops the cached image view
                     const optimizedData = data.map(item => {
                         const copy = { ...item };
-                        
-                        // Check for common large fields in our types (ReceiptData, etc)
-                        if (copy.imageUrl && typeof copy.imageUrl === 'string' && copy.imageUrl.length > 500) {
-                            delete copy.imageUrl; 
-                        }
-                        if (copy.base64 && typeof copy.base64 === 'string' && copy.base64.length > 500) {
-                             delete copy.base64;
-                        }
+                        if (copy.imageUrl && typeof copy.imageUrl === 'string' && copy.imageUrl.length > 500) delete copy.imageUrl; 
+                        if (copy.base64 && typeof copy.base64 === 'string' && copy.base64.length > 500) delete copy.base64;
                         return copy;
                     });
-
                     try {
                         const optimizedPayload = JSON.stringify(optimizedData);
                         localStorage.setItem(key, optimizedPayload);
                         console.log(`[Storage] Saved optimized version for ${key} (Heavy assets stripped).`);
-                        return; // Success on retry
+                        return; 
                     } catch (retryErr) {
                          console.error("[Storage] Optimization failed. Data still too large.", retryErr);
                     }
@@ -113,6 +125,22 @@ class StorageService {
             } else {
                 console.error("Storage Write Failed", e);
             }
+        }
+
+        // SYNC TO GCP IF CONFIGURED
+        if (this.provider === 'GCS' && this.gcpConfig?.bucketName) {
+            // NOTE: In a browser environment without a backend proxy, standard GCS JSON API calls 
+            // usually require an OAuth token. For this demo, we simulate the network call structure.
+            // In a real app, this would perform a fetch to a signed URL or API endpoint.
+            
+            console.log(`[GCS Sync] Uploading ${key} to gs://${this.gcpConfig.bucketName}...`);
+            
+            // Simulation of latency
+            await delay(1200); 
+            
+            // Example structure of what a real call might look like:
+            // const url = `https://storage.googleapis.com/upload/storage/v1/b/${this.gcpConfig.bucketName}/o?uploadType=media&name=${this.userEmail}/${key}.json`;
+            // await fetch(url, { method: 'POST', body: JSON.stringify(data), headers: { Authorization: `Bearer ${token}` } });
         }
     }
 
@@ -126,46 +154,43 @@ class StorageService {
     }
 
     async load<T>(type: string): Promise<T[]> {
-        const key = this.getPath(type);
-
-        if (this.provider === 'GCS') {
-            console.log(`[GCS] Downloading from ${key}...`);
-            await delay(600);
+        // In an offline-first model, we load from local storage immediately
+        // Background sync could perform a "Check for updates" from GCS here
+        const data = localStorage.getItem(type);
+        
+        if (this.provider === 'GCS' && !data) {
+             // If local is empty but we are in GCS mode, we might try to fetch
+             console.log(`[GCS Sync] Attempting to hydrate ${type} from cloud...`);
+             await delay(500); 
+             // Logic to fetch from cloud would go here
         }
 
-        const data = localStorage.getItem(key);
         return data ? JSON.parse(data) : [];
     }
 
     async getStats(): Promise<StorageStats> {
         let usage = 0;
-        // Estimate usage based on local storage characters (approx 2 bytes per char)
         for (const key in localStorage) {
             if (localStorage.hasOwnProperty(key)) {
                 usage += (localStorage[key].length * 2);
             }
         }
 
-        // Get browser quota if available
         let quota = 0;
         if (navigator.storage && navigator.storage.estimate) {
             try {
                 const estimate = await navigator.storage.estimate();
                 if (estimate.quota) quota = estimate.quota;
-                if (estimate.usage) usage = estimate.usage; // Use real usage if available
-            } catch (e) {
-                // Ignore
-            }
+                if (estimate.usage) usage = estimate.usage; 
+            } catch (e) {}
         }
 
-        // Recommended limits based on Tier to keep app performant
         const limits = {
-            'Low-End': 50 * 1024 * 1024, // 50MB
-            'Mid-Range': 250 * 1024 * 1024, // 250MB
-            'High-End': 1024 * 1024 * 1024 // 1GB
+            'Low-End': 50 * 1024 * 1024, 
+            'Mid-Range': 250 * 1024 * 1024, 
+            'High-End': 1024 * 1024 * 1024 
         };
 
-        // Fallback quota if API fails
         if (!quota) quota = limits[this._deviceTier] * 2; 
 
         return {
@@ -178,8 +203,54 @@ class StorageService {
     }
 
     async clearUserCache(type: string) {
-        const key = this.getPath(type);
-        localStorage.removeItem(key);
+        localStorage.removeItem(type);
+    }
+
+    // --- EXPORT / IMPORT CENTRAL ---
+
+    async exportAllData(): Promise<string> {
+        const fullDump: Record<string, any> = {};
+        
+        // 1. Gather all module data
+        for (const key of MODULE_KEYS) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+                try {
+                    fullDump[key] = JSON.parse(raw);
+                } catch(e) {
+                    console.error(`Failed to export ${key}`, e);
+                }
+            }
+        }
+
+        // 2. Add Metadata
+        fullDump['meta'] = {
+            exportedAt: new Date().toISOString(),
+            userEmail: this.userEmail,
+            version: '1.0'
+        };
+
+        return JSON.stringify(fullDump, null, 2);
+    }
+
+    async importAllData(jsonString: string): Promise<boolean> {
+        try {
+            const dump = JSON.parse(jsonString);
+            
+            // Validate basic structure
+            if (!dump['meta']) throw new Error("Invalid backup file: Missing metadata");
+
+            // Restore keys
+            for (const key of Object.keys(dump)) {
+                if (key !== 'meta' && MODULE_KEYS.includes(key)) {
+                    localStorage.setItem(key, JSON.stringify(dump[key]));
+                }
+            }
+            return true;
+        } catch (e) {
+            console.error("Import failed", e);
+            return false;
+        }
     }
 
     // --- ACTIVITY LOGGING ---
@@ -212,25 +283,16 @@ class StorageService {
     // --- SCREENSHOTS ---
 
     saveScreenshot(item: ScreenshotItem) {
-        // Enforce quota: Keep max 10 global screenshots, prioritizing recent
-        // For specific tool, limit to 3.
         const existingStr = localStorage.getItem(STORAGE_KEYS.SCREENSHOTS);
         let shots: ScreenshotItem[] = existingStr ? JSON.parse(existingStr) : [];
         
-        // Remove oldest if count > 10
-        if (shots.length >= 10) {
-            shots = shots.slice(0, 9);
-        }
-        
-        // Add new
+        if (shots.length >= 10) shots = shots.slice(0, 9);
         shots = [item, ...shots];
 
         try {
             localStorage.setItem(STORAGE_KEYS.SCREENSHOTS, JSON.stringify(shots));
         } catch (e) {
             if (this.isQuotaError(e)) {
-                // Emergency cleanup: keep only last 2
-                console.warn("[Storage] Quota hit on screenshot save. Truncating history.");
                 const emergencyShots = [item, ...shots.slice(1, 2)];
                 localStorage.setItem(STORAGE_KEYS.SCREENSHOTS, JSON.stringify(emergencyShots));
             }

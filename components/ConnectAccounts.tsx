@@ -1,8 +1,9 @@
 
 import React, { useState, useRef } from 'react';
 import { IntegrationAccount, IntegrationType, ApiConfig, ReceiptData, ActionItem, CalendarEvent, AppSettings } from '../types';
-import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning, Globe, DollarSign, Languages, FileText, Image as ImageIcon, LayoutTemplate, Loader2, Building2, Stamp, CreditCard } from 'lucide-react';
+import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning, Globe, DollarSign, Languages, FileText, Image as ImageIcon, LayoutTemplate, Loader2, Building2, Stamp, CreditCard, Server, Upload } from 'lucide-react';
 import { securityService } from '../services/securityService';
+import { storageService } from '../services/storageService';
 
 interface ConnectAccountsProps {
   accounts: IntegrationAccount[];
@@ -22,6 +23,8 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   const [isAdding, setIsAdding] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
   
   // Form State
   const [newAccountType, setNewAccountType] = useState<IntegrationType>('GDrive');
@@ -79,31 +82,53 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
       setShowApiConfig(false);
   };
 
-  const handleExportData = () => {
-      const exportData = {
-          timestamp: new Date().toISOString(),
-          settings,
-          receipts,
-          tasks,
-          events,
-          accounts
-      };
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `FounderOS_Backup_${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+  const handleExportData = async () => {
+      setIsExporting(true);
+      try {
+          const exportJson = await storageService.exportAllData();
+          const blob = new Blob([exportJson], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `FounderOS_Global_Backup_${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+      } catch (e) {
+          alert("Export failed.");
+          console.error(e);
+      } finally {
+          setIsExporting(false);
+      }
   };
 
-  const handleBackupToCloud = async () => {
-      setIsBackingUp(true);
-      // Simulate Drive API Upload
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      alert("Backup successfully uploaded to your Google Drive folder 'FounderOS_Backups'.");
-      setIsBackingUp(false);
+  const handleImportData = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      if (confirm("Warning: Importing a backup will overwrite existing local data. Continue?")) {
+          try {
+              const text = await file.text();
+              const success = await storageService.importAllData(text);
+              if (success) {
+                  alert("Import successful. Reloading...");
+                  window.location.reload();
+              } else {
+                  alert("Import failed. Invalid file structure.");
+              }
+          } catch(e) {
+              alert("Error reading file.");
+          }
+      }
+      if (importRef.current) importRef.current.value = '';
+  };
+
+  const handleUpdateGCPConfig = (field: keyof NonNullable<AppSettings['gcpConfig']>, value: any) => {
+      const currentConfig = settings.gcpConfig || { bucketName: '', projectId: '', autoSync: false };
+      const newConfig = { ...currentConfig, [field]: value };
+      onUpdateSettings({ ...settings, gcpConfig: newConfig });
+      // Re-configure storage service dynamically
+      // In real app, might need a cleaner way to re-init service
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'logoUrl' | 'signatureUrl') => {
@@ -190,6 +215,61 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                       <option value="CAD">CAD ($)</option>
                       <option value="AUD">AUD ($)</option>
                   </select>
+              </div>
+          </div>
+      </div>
+
+      {/* Cloud Infrastructure Configuration */}
+      <div>
+          <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
+              <Server className="w-5 h-5" /> Cloud Storage Infrastructure
+          </h3>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+              <div className="flex items-center gap-2 mb-4">
+                  <div className="p-2 bg-indigo-500/10 rounded-lg">
+                      <UploadCloud className="w-5 h-5 text-indigo-400" />
+                  </div>
+                  <div>
+                      <h4 className="text-white font-medium">Google Cloud Storage (GCS)</h4>
+                      <p className="text-xs text-zinc-500">Configure central bucket for data synchronization.</p>
+                  </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                      <label className="block text-xs font-medium text-zinc-500 mb-1">Project ID</label>
+                      <input 
+                          type="text"
+                          value={settings.gcpConfig?.projectId || ''}
+                          onChange={(e) => handleUpdateGCPConfig('projectId', e.target.value)}
+                          placeholder="my-gcp-project-id"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      />
+                  </div>
+                  <div>
+                      <label className="block text-xs font-medium text-zinc-500 mb-1">Bucket Name</label>
+                      <input 
+                          type="text"
+                          value={settings.gcpConfig?.bucketName || ''}
+                          onChange={(e) => handleUpdateGCPConfig('bucketName', e.target.value)}
+                          placeholder="founder-os-central-storage"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      />
+                  </div>
+              </div>
+              
+              <div className="mt-6 flex items-center justify-between border-t border-zinc-800 pt-4">
+                  <div className="flex items-center gap-3">
+                      <div onClick={() => handleUpdateGCPConfig('autoSync', !settings.gcpConfig?.autoSync)} className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${settings.gcpConfig?.autoSync ? 'bg-indigo-600' : 'bg-zinc-700'}`}>
+                          <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${settings.gcpConfig?.autoSync ? 'translate-x-4' : 'translate-x-0'}`} />
+                      </div>
+                      <span className="text-sm text-zinc-300">Enable Cloud Auto-Sync</span>
+                  </div>
+                  {settings.gcpConfig?.autoSync && (
+                      <span className="text-xs text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">
+                          Active • Syncing to gs://{settings.gcpConfig.bucketName}
+                      </span>
+                  )}
               </div>
           </div>
       </div>
@@ -359,7 +439,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
       {/* Cloud & Email Section */}
       <div>
         <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
-            <UploadCloud className="w-5 h-5" /> Cloud & Email
+            <UploadCloud className="w-5 h-5" /> Cloud & Email Integrations
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {accounts.filter(a => a.provider !== 'Local').map(account => (
@@ -458,18 +538,22 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                  </div>
                  
                  <div className="flex flex-col gap-3">
-                    <button onClick={handleExportData} className="px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl flex items-center justify-between gap-2 text-sm transition-colors border border-zinc-700 group">
-                        <span className="flex items-center gap-2"><Download className="w-4 h-4" /> Download Local JSON</span>
-                        <span className="text-zinc-500 text-xs group-hover:text-zinc-400">All data</span>
+                    <button onClick={handleExportData} disabled={isExporting} className="px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl flex items-center justify-between gap-2 text-sm transition-colors border border-zinc-700 group">
+                        <span className="flex items-center gap-2">
+                            {isExporting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4" />} 
+                            Download Full System Backup
+                        </span>
+                        <span className="text-zinc-500 text-xs group-hover:text-zinc-400">JSON</span>
                     </button>
                     
-                    <button onClick={handleBackupToCloud} disabled={isBackingUp} className="px-4 py-3 bg-indigo-900/30 hover:bg-indigo-900/50 text-indigo-200 border border-indigo-500/30 rounded-xl flex items-center justify-between gap-2 text-sm transition-colors">
+                    <button onClick={() => importRef.current?.click()} className="px-4 py-3 bg-zinc-900/30 hover:bg-zinc-900/50 text-indigo-200 border border-indigo-500/30 rounded-xl flex items-center justify-between gap-2 text-sm transition-colors">
                         <span className="flex items-center gap-2">
-                            {isBackingUp ? <RefreshCw className="w-4 h-4 animate-spin"/> : <CloudLightning className="w-4 h-4" />} 
-                            {isBackingUp ? "Uploading..." : "Save to Google Drive"}
+                            <Upload className="w-4 h-4" />
+                            Import / Restore Backup
                         </span>
-                        <span className="text-indigo-400/70 text-xs">One-click backup</span>
+                        <span className="text-indigo-400/70 text-xs">Overwrite All</span>
                     </button>
+                    <input type="file" ref={importRef} className="hidden" accept=".json" onChange={handleImportData} />
                  </div>
              </div>
              

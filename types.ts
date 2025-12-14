@@ -13,7 +13,7 @@ export enum ViewState {
 
 export type IntegrationType = 'Gmail' | 'Outlook' | 'GDrive' | 'Local';
 
-export type StorageProviderType = 'LOCAL' | 'GCS';
+export type StorageProviderType = 'LOCAL' | 'GCS' | 'FIREBASE';
 
 export type DeviceTier = 'High-End' | 'Mid-Range' | 'Low-End';
 
@@ -65,6 +65,14 @@ export interface AppSettings {
   swish?: string;
   iban?: string;
   bic?: string;
+
+  // Cloud Storage Config
+  gcpConfig?: {
+      bucketName: string;
+      projectId: string;
+      folderPath?: string;
+      autoSync: boolean;
+  };
 }
 
 // --- DYNAMIC INVOICE SCHEMA ---
