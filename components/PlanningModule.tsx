@@ -2,9 +2,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { ViewState, GrowthPlan, AppSettings } from '../types';
 import { storageService } from '../services/storageService';
-import { TrendingUp, Users, AlertTriangle, Save, RefreshCw, Briefcase, LineChart, Target, Camera, Coins, Plus, Trash2, Download, Upload, MoreHorizontal, FileJson, Layout, ChevronRight, Copy, Rocket, BrainCircuit, Server } from 'lucide-react';
+import { TrendingUp, Users, AlertTriangle, Save, RefreshCw, Briefcase, LineChart, Target, Camera, Coins, Plus, Trash2, Download, Upload, MoreHorizontal, FileJson, Layout, ChevronRight, Copy, Rocket, BrainCircuit, Server, FileText, Loader2 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, ComposedChart, Line } from 'recharts';
 import { ProcessingStatus } from './ProcessingStatus';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 interface PlanningModuleProps {
     onOpenCapture: () => void;
@@ -42,8 +44,10 @@ export const PlanningModule: React.FC<PlanningModuleProps> = ({ onOpenCapture, s
     const [activeId, setActiveId] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState(false);
     const [statusText, setStatusText] = useState('');
+    const [isExportingPdf, setIsExportingPdf] = useState(false);
     
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const printRef = useRef<HTMLDivElement>(null);
 
     // --- Active Plan Resolution ---
     const activePlan = useMemo(() => {
@@ -181,6 +185,37 @@ export const PlanningModule: React.FC<PlanningModuleProps> = ({ onOpenCapture, s
         a.click();
     };
 
+    const handleExportPDF = async () => {
+        if (!printRef.current) return;
+        setIsExportingPdf(true);
+        try {
+            const canvas = await html2canvas(printRef.current, {
+                scale: 2, // High resolution
+                backgroundColor: '#09090b', // Keep theme
+                useCORS: true,
+                logging: false
+            });
+            
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF({
+                orientation: 'landscape',
+                unit: 'mm',
+                format: 'a4'
+            });
+
+            const imgWidth = 297; // A4 Landscape width
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            
+            pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+            pdf.save(`${activePlan.name.replace(/\s+/g, '_')}_Projections.pdf`);
+        } catch (e) {
+            console.error("PDF Export failed", e);
+            alert("Failed to export PDF.");
+        } finally {
+            setIsExportingPdf(false);
+        }
+    };
+
     const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -214,7 +249,10 @@ export const PlanningModule: React.FC<PlanningModuleProps> = ({ onOpenCapture, s
                 <div className="flex gap-3">
                     <button onClick={() => fileInputRef.current?.click()} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors" title="Import JSON"><Upload className="w-5 h-5" /></button>
                     <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleImport} />
-                    <button onClick={handleExport} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors" title="Export JSON"><Download className="w-5 h-5" /></button>
+                    <button onClick={handleExport} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors" title="Export JSON"><FileJson className="w-5 h-5" /></button>
+                    <button onClick={handleExportPDF} disabled={isExportingPdf} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-indigo-400 hover:border-indigo-500/30 transition-colors bg-zinc-900" title="Export PDF">
+                        {isExportingPdf ? <Loader2 className="w-5 h-5 animate-spin"/> : <FileText className="w-5 h-5" />}
+                    </button>
                     <button onClick={onOpenCapture} className="p-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/30 transition-colors bg-zinc-900" title="Capture View"><Camera className="w-5 h-5" /></button>
                 </div>
             </header>
@@ -249,7 +287,7 @@ export const PlanningModule: React.FC<PlanningModuleProps> = ({ onOpenCapture, s
                 </div>
 
                 {/* MAIN: Planner Interface */}
-                <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                <div ref={printRef} className="flex-1 flex flex-col gap-6 overflow-hidden bg-[#09090b]">
                     {/* Top Bar: Active Plan Settings */}
                     <div className="flex items-center gap-4 bg-zinc-900/40 p-4 rounded-2xl border border-white/5">
                         <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400"><Target className="w-5 h-5" /></div>

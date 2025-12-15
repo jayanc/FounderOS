@@ -118,15 +118,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
              <p className="text-xs text-zinc-500 truncate">{user?.email || 'No Email'}</p>
            </div>
         </div>
-        <div className="flex gap-2">
-            <button onClick={onLogout} className="flex-1 flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-rose-400 transition-colors rounded-lg hover:bg-rose-500/10">
-                <LogOut className="w-3.5 h-3.5" /> <span className="hidden md:inline">Sign Out</span>
-            </button>
-            {onStartGuide && (
-                <button onClick={onStartGuide} className="flex-1 flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-indigo-500/10" title="Start Tour">
-                    <LifeBuoy className="w-3.5 h-3.5" /> <span className="hidden md:inline">Guide</span>
+        <div className="flex flex-col gap-2">
+            <div className="flex gap-2">
+                <button onClick={onLogout} className="flex-1 flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-rose-400 transition-colors rounded-lg hover:bg-rose-500/10">
+                    <LogOut className="w-3.5 h-3.5" /> <span className="hidden md:inline">Sign Out</span>
                 </button>
-            )}
+                {onStartGuide && (
+                    <button onClick={onStartGuide} className="flex-1 flex items-center gap-2 justify-center p-2 text-xs font-medium text-zinc-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-indigo-500/10" title="Start Tour">
+                        <LifeBuoy className="w-3.5 h-3.5" /> <span className="hidden md:inline">Guide</span>
+                    </button>
+                )}
+            </div>
+            <div className="text-[10px] text-zinc-700 text-center font-mono">
+                v1.2.0
+            </div>
         </div>
       </div>
     </div>

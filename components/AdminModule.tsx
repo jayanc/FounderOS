@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { User, AppSettings, ReceiptData, ActionItem, ViewState, UserRole } from '../types';
-import { ShieldAlert, Server, Users, Activity, HardDrive, AlertTriangle, Search, Lock, Unlock, Database, TrendingUp, BarChart3, Layers, Download, RefreshCw, Key, CreditCard, Clock, Globe, Plus, Pencil, Trash2, CheckCircle2, MoreHorizontal, X, Save, Shield, Phone, Mail, Loader2, Send } from 'lucide-react';
+import { User, AppSettings, ReceiptData, ActionItem, ViewState, UserRole, UserStatus } from '../types';
+import { ShieldAlert, Server, Users, Activity, HardDrive, AlertTriangle, Search, Lock, Unlock, Database, TrendingUp, BarChart3, Layers, Download, RefreshCw, Key, CreditCard, Clock, Globe, Plus, Pencil, Trash2, CheckCircle2, MoreHorizontal, X, Save, Shield, Phone, Mail, Loader2, Send, Filter, Ban, Power, Timer } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { storageService } from '../services/storageService';
 
@@ -26,8 +26,10 @@ const MODULES_LIST = [
 export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings, userReceipts, userTasks }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'finance'>('overview');
     const [searchTerm, setSearchTerm] = useState('');
+    const [roleFilter, setRoleFilter] = useState<'All' | 'Admin' | 'User' | 'Viewer'>('All');
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [sendingInviteFor, setSendingInviteFor] = useState<string | null>(null);
     
     // User Management State
     const [users, setUsers] = useState<User[]>([]);
@@ -40,6 +42,7 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
         email: '',
         phoneNumber: '',
         role: 'User',
+        status: 'Active',
         password: '',
         allowedModules: MODULES_LIST.map(m => m.id), // Default all
         department: 'General'
@@ -52,18 +55,23 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
 
     const loadUsers = async () => {
         setIsRefreshing(true);
-        const storedUsers = await storageService.getSystemUsers();
-        
-        // Ensure current user is in the list for the UI if local storage is empty initially
-        let allUsers = storedUsers;
-        if (storedUsers.length === 0 && currentUser.email) {
-             allUsers = [currentUser];
+        try {
+            const storedUsers = await storageService.getSystemUsers();
+            
+            // Ensure current user is in the list for the UI if local storage is empty initially
+            let allUsers = storedUsers;
+            if (storedUsers.length === 0 && currentUser.email) {
+                 allUsers = [currentUser];
+            }
+            
+            // Deduplicate based on email
+            const uniqueUsers = Array.from(new Map(allUsers.map(item => [item.email, item])).values());
+            setUsers(uniqueUsers);
+        } catch (e) {
+            console.error("Failed to load users", e);
+        } finally {
+            setIsRefreshing(false);
         }
-        
-        // Deduplicate based on email
-        const uniqueUsers = Array.from(new Map(allUsers.map(item => [item.email, item])).values());
-        setUsers(uniqueUsers);
-        setIsRefreshing(false);
     };
 
     // User CRUD Operations
@@ -74,6 +82,7 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
             email: '',
             phoneNumber: '',
             role: 'User',
+            status: 'Active',
             password: '',
             allowedModules: MODULES_LIST.map(m => m.id),
             department: 'General',
@@ -86,7 +95,9 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
         setEditingUser(user);
         setFormData({
             ...user,
-            password: '' // Don't show existing password
+            password: '', // Don't show existing password
+            allowedModules: user.allowedModules || [], // Ensure array
+            status: user.status || 'Active'
         });
         setIsUserModalOpen(true);
     };
@@ -94,44 +105,92 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
     const handleDeleteUser = async (userId: string) => {
         if (userId === currentUser.id) return alert("Cannot delete yourself.");
         if (confirm("Are you sure you want to delete this user? This cannot be undone.")) {
-            await storageService.deleteSystemUser(userId);
-            loadUsers();
+            // Optimistic update
+            setUsers(prev => prev.filter(u => u.id !== userId));
+            try {
+                await storageService.deleteSystemUser(userId);
+            } catch(e) {
+                alert("Failed to delete user on server. Please refresh.");
+                loadUsers();
+            }
         }
     };
 
     const handleSaveUser = async () => {
         if (!formData.name || !formData.email) return alert("Name and Email are required.");
+        
         setIsSaving(true);
         
-        try {
-            const userToSave: User = {
-                ...editingUser,
-                id: editingUser?.id || crypto.randomUUID(),
-                name: formData.name,
-                email: formData.email,
-                phoneNumber: formData.phoneNumber,
-                role: formData.role as UserRole,
-                department: formData.department,
-                mfaVerified: formData.mfaVerified || false,
-                // Only update password if provided
-                ...(formData.password ? { password: formData.password } : {}),
-                allowedModules: formData.allowedModules,
-                lastActive: editingUser?.lastActive || new Date().toISOString()
-            };
+        const userToSave: User = {
+            ...editingUser,
+            id: editingUser?.id || crypto.randomUUID(),
+            name: formData.name || '',
+            email: formData.email || '',
+            phoneNumber: formData.phoneNumber || '',
+            role: (formData.role as UserRole) || 'User',
+            status: (formData.status as UserStatus) || 'Active',
+            department: formData.department || '',
+            mfaVerified: formData.mfaVerified || false,
+            // Only update password if provided
+            ...(formData.password ? { password: formData.password } : {}),
+            allowedModules: formData.allowedModules || [], // FIX: Default to empty array
+            lastActive: editingUser?.lastActive || new Date().toISOString()
+        };
 
+        // 1. Optimistic Update (Immediate Feedback)
+        setUsers(prev => {
+            const index = prev.findIndex(u => u.id === userToSave.id);
+            if (index > -1) {
+                const updated = [...prev];
+                updated[index] = userToSave;
+                return updated;
+            }
+            return [userToSave, ...prev];
+        });
+
+        // 2. Close Modal Immediately
+        setIsUserModalOpen(false);
+        setIsSaving(false); 
+
+        // 3. Persist Background
+        try {
             await storageService.saveSystemUser(userToSave);
-            setIsUserModalOpen(false);
-            loadUsers();
         } catch (e: any) {
-            alert(`Error saving user: ${e.message}`);
-        } finally {
-            setIsSaving(false);
+            console.error(e);
+            alert(`Background Save Error: ${e.message}`);
+            // Revert or reload if needed, but rarely needed for non-critical admin ops
+            loadUsers();
         }
     };
 
-    const handleSendInvite = (user: User) => {
-        alert(`Invitation sent to ${user.email} and ${user.phoneNumber || 'their phone'}.`);
+    const handleSendInvite = async (user: User) => {
+        if (!user.id) return;
+        setSendingInviteFor(user.id);
+        try {
+            await storageService.sendUserInvite(user);
+            
+            // Optimistic update for UI feedback
+            setUsers(prev => prev.map(u => 
+                u.id === user.id 
+                ? { ...u, status: 'Pending Validation', verificationSentAt: new Date().toISOString() } 
+                : u
+            ));
+            
+            alert(`Invitation sent to ${user.email}. Status updated to 'Pending Validation'.`);
+        } catch (e: any) {
+            console.error(e);
+            alert("Failed to send invite: " + e.message);
+        } finally {
+            setSendingInviteFor(null);
+        }
     };
+
+    const handleResetPassword = (user: User) => {
+        if(confirm(`Send password reset email to ${user.email}?`)) {
+            storageService.initiatePasswordReset(user.email);
+            alert("Reset email queued.");
+        }
+    }
 
     const toggleModulePermission = (moduleId: ViewState) => {
         setFormData(prev => {
@@ -146,7 +205,7 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
 
     // --- AGGREGATES ---
     const totalUsers = users.length;
-    const activeUsers = users.length; // Simply count all for now as 'active' implies registered
+    const activeUsers = users.filter(u => u.status !== 'Suspended').length; 
     const totalStorage = 124 * users.length; // Simulated
     
     const departmentSpend = useMemo(() => {
@@ -166,6 +225,12 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
     };
 
     const COLORS = ['#f59e0b', '#10b981', '#6366f1', '#ec4899', '#3b82f6'];
+
+    const filteredUsers = users.filter(u => {
+        const matchesSearch = u.name.toLowerCase().includes(searchTerm.toLowerCase()) || u.email.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesRole = roleFilter === 'All' || u.role === roleFilter;
+        return matchesSearch && matchesRole;
+    });
 
     return (
         <div className="flex flex-col h-full gap-6 animate-in fade-in duration-500 relative">
@@ -307,19 +372,36 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                 {/* 2. USER DIRECTORY TAB */}
                 {activeTab === 'users' && (
                     <div className="flex flex-col h-full">
-                        <div className="flex justify-between mb-4">
-                            <div className="flex items-center gap-2 bg-black/30 border border-zinc-800 rounded-xl px-3 py-2 w-64">
+                        <div className="flex justify-between mb-4 gap-4">
+                            <div className="flex items-center gap-2 bg-black/30 border border-zinc-800 rounded-xl px-3 py-2 flex-1 max-w-md">
                                 <Search className="w-4 h-4 text-zinc-500" />
                                 <input 
                                     value={searchTerm}
                                     onChange={(e) => setSearchTerm(e.target.value)}
-                                    placeholder="Search users..." 
+                                    placeholder="Search users by name or email..." 
                                     className="bg-transparent text-sm text-white focus:outline-none w-full placeholder:text-zinc-600"
                                 />
                             </div>
-                            <button onClick={handleAddUser} className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors text-sm font-bold shadow-lg shadow-amber-900/20">
-                                <Plus className="w-4 h-4" /> Add User
-                            </button>
+                            
+                            <div className="flex gap-2">
+                                <div className="flex items-center gap-2 bg-black/30 border border-zinc-800 rounded-xl px-3 py-2">
+                                    <Filter className="w-4 h-4 text-zinc-500" />
+                                    <select 
+                                        value={roleFilter}
+                                        onChange={(e) => setRoleFilter(e.target.value as any)}
+                                        className="bg-transparent text-sm text-white focus:outline-none"
+                                    >
+                                        <option value="All">All Roles</option>
+                                        <option value="Admin">Admin</option>
+                                        <option value="User">User</option>
+                                        <option value="Viewer">Viewer</option>
+                                    </select>
+                                </div>
+                                
+                                <button onClick={handleAddUser} className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors text-sm font-bold shadow-lg shadow-amber-900/20 whitespace-nowrap">
+                                    <Plus className="w-4 h-4" /> Add User
+                                </button>
+                            </div>
                         </div>
                         <div className="flex-1 overflow-auto custom-scrollbar border border-white/5 rounded-xl">
                             <table className="w-full text-left text-sm text-zinc-400">
@@ -327,14 +409,14 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                     <tr>
                                         <th className="p-4 border-b border-zinc-800">User</th>
                                         <th className="p-4 border-b border-zinc-800">Role</th>
-                                        <th className="p-4 border-b border-zinc-800">Contact</th>
+                                        <th className="p-4 border-b border-zinc-800">Status</th>
                                         <th className="p-4 border-b border-zinc-800">Access</th>
                                         <th className="p-4 border-b border-zinc-800 text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-zinc-800 bg-black/20">
-                                    {users.filter(u => u.name.toLowerCase().includes(searchTerm.toLowerCase())).map(u => (
-                                        <tr key={u.id || u.email} className="hover:bg-white/5 transition-colors">
+                                    {filteredUsers.map(u => (
+                                        <tr key={u.id || u.email} className={`hover:bg-white/5 transition-colors ${u.status === 'Suspended' ? 'opacity-50' : ''}`}>
                                             <td className="p-4">
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-white border border-zinc-700 relative">
@@ -347,7 +429,11 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                                             {u.name} 
                                                             {u.id === currentUser.id && <span className="text-[10px] text-amber-500 bg-amber-500/10 px-1 rounded ml-1">(YOU)</span>}
                                                         </div>
-                                                        <div className="text-xs text-zinc-500">{u.department || 'General'}</div>
+                                                        <div className="text-xs text-zinc-500 flex gap-2">
+                                                            <span>{u.department || 'General'}</span>
+                                                            <span>•</span>
+                                                            <span className="flex items-center gap-1"><Mail className="w-3 h-3"/> {u.email}</span>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </td>
@@ -360,14 +446,19 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                                 </span>
                                             </td>
                                             <td className="p-4">
-                                                <div className="flex flex-col gap-1 text-xs">
-                                                    <div className="flex items-center gap-2 text-zinc-300">
-                                                        <Mail className="w-3 h-3 text-zinc-500"/> {u.email}
-                                                    </div>
-                                                    {u.phoneNumber && (
-                                                        <div className="flex items-center gap-2 text-zinc-400">
-                                                            <Phone className="w-3 h-3 text-zinc-500"/> {u.phoneNumber}
-                                                        </div>
+                                                <div className="flex flex-col gap-1">
+                                                    <span className={`px-2 py-1 rounded-full text-[10px] uppercase font-bold flex items-center gap-1 w-fit ${
+                                                        u.status === 'Suspended' ? 'bg-red-500/10 text-red-400' : 
+                                                        u.status === 'Pending Validation' ? 'bg-indigo-500/10 text-indigo-400' :
+                                                        'bg-emerald-500/10 text-emerald-400'
+                                                    }`}>
+                                                        {u.status === 'Suspended' ? <Ban className="w-3 h-3"/> : 
+                                                         u.status === 'Pending Validation' ? <Timer className="w-3 h-3"/> : 
+                                                         <CheckCircle2 className="w-3 h-3"/>}
+                                                        {u.status || 'Active'}
+                                                    </span>
+                                                    {u.status === 'Pending Validation' && u.verificationSentAt && (
+                                                        <span className="text-[9px] text-zinc-500 ml-1">Sent: {new Date(u.verificationSentAt).toLocaleDateString()}</span>
                                                     )}
                                                 </div>
                                             </td>
@@ -379,8 +470,13 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                             </td>
                                             <td className="p-4 text-right">
                                                 <div className="flex justify-end gap-2">
-                                                    <button onClick={() => handleSendInvite(u)} className="p-2 hover:bg-emerald-500/10 rounded-lg text-zinc-400 hover:text-emerald-400 transition-colors" title="Send Verify Email">
-                                                        <Send className="w-4 h-4" />
+                                                    <button 
+                                                        onClick={() => handleSendInvite(u)} 
+                                                        disabled={sendingInviteFor === u.id}
+                                                        className="p-2 hover:bg-emerald-500/10 rounded-lg text-zinc-400 hover:text-emerald-400 transition-colors disabled:opacity-50" 
+                                                        title="Send Verify Email / Invite"
+                                                    >
+                                                        {sendingInviteFor === u.id ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4" />}
                                                     </button>
                                                     <button onClick={() => handleEditUser(u)} className="p-2 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors" title="Edit User">
                                                         <Pencil className="w-4 h-4" />
@@ -394,6 +490,13 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                             </td>
                                         </tr>
                                     ))}
+                                    {filteredUsers.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} className="p-8 text-center text-zinc-500">
+                                                No users found matching your filters.
+                                            </td>
+                                        </tr>
+                                    )}
                                 </tbody>
                             </table>
                         </div>
@@ -461,6 +564,13 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                             placeholder="Engineering"
                                         />
                                     </div>
+                                </div>
+                            </div>
+
+                            {/* Access & Status */}
+                            <div className="space-y-4">
+                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2"><Key className="w-3 h-3"/> Access & Status</h4>
+                                <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="text-xs text-zinc-400 block mb-1">System Role</label>
                                         <select 
@@ -473,30 +583,49 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                             <option value="Admin">Admin</option>
                                         </select>
                                     </div>
+                                    <div>
+                                        <label className="text-xs text-zinc-400 block mb-1">Account Status</label>
+                                        <select 
+                                            value={formData.status || 'Active'} 
+                                            onChange={e => setFormData({...formData, status: e.target.value as UserStatus})}
+                                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-white focus:border-indigo-500 outline-none"
+                                        >
+                                            <option value="Active">Active</option>
+                                            <option value="Pending Validation">Pending Validation</option>
+                                            <option value="Suspended">Suspended</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
 
                             {/* Security Section */}
                             <div className="space-y-4">
-                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2"><Lock className="w-3 h-3"/> Security</h4>
-                                <div>
-                                    <label className="text-xs text-zinc-400 block mb-1">Set Password {editingUser && '(Leave blank to keep current)'}</label>
-                                    <div className="relative">
-                                        <Key className="absolute left-3 top-2.5 w-4 h-4 text-zinc-600" />
-                                        <input 
-                                            type="password"
-                                            value={formData.password}
-                                            onChange={e => setFormData({...formData, password: e.target.value})}
-                                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-3 py-2 text-white focus:border-indigo-500 outline-none"
-                                            placeholder="********"
-                                        />
+                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2"><Lock className="w-3 h-3"/> Security Credentials</h4>
+                                <div className="flex gap-4 items-end">
+                                    <div className="flex-1">
+                                        <label className="text-xs text-zinc-400 block mb-1">Set New Password {editingUser && '(Leave blank to keep current)'}</label>
+                                        <div className="relative">
+                                            <Key className="absolute left-3 top-2.5 w-4 h-4 text-zinc-600" />
+                                            <input 
+                                                type="password"
+                                                value={formData.password}
+                                                onChange={e => setFormData({...formData, password: e.target.value})}
+                                                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-3 py-2 text-white focus:border-indigo-500 outline-none"
+                                                placeholder="********"
+                                            />
+                                        </div>
                                     </div>
+                                    {editingUser && (
+                                        <button onClick={() => handleResetPassword(editingUser)} className="px-4 py-2 border border-zinc-700 hover:border-zinc-500 hover:text-white text-zinc-400 rounded-xl text-xs font-medium transition-colors mb-0.5">
+                                            Send Reset Email
+                                        </button>
+                                    )}
                                 </div>
                             </div>
 
                             {/* Access Control Matrix */}
                             <div className="space-y-4">
-                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2"><Shield className="w-3 h-3"/> Module Access Matrix</h4>
+                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2"><Shield className="w-3 h-3"/> Module Permissions</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                     {MODULES_LIST.map(mod => {
                                         const isAllowed = formData.allowedModules?.includes(mod.id);

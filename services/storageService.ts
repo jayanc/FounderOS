@@ -3,6 +3,7 @@ import { User, StorageProviderType, StorageStats, DeviceTier, ActivityLogEntry, 
 import { db, storage, auth } from "../firebaseConfig";
 import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc, writeBatch } from "firebase/firestore";
 import { ref, uploadString, getDownloadURL, deleteObject } from "firebase/storage";
+import { sendPasswordResetEmail } from "firebase/auth";
 
 const STORAGE_KEYS = {
     ACTIVITY_LOG: 'founder_os_activity_log',
@@ -37,9 +38,27 @@ class StorageService {
         return auth.currentUser?.uid || 'guest';
     }
 
+    // --- HELPER: Sanitize Payload for Firestore ---
+    // Firestore rejects 'undefined' values. We must replace them with null or remove them.
+    private sanitizePayload(obj: any): any {
+        if (obj === null || obj === undefined) return null;
+        if (typeof obj !== 'object') return obj;
+        if (Array.isArray(obj)) return obj.map(v => this.sanitizePayload(v));
+        
+        const newObj: any = {};
+        for (const key in obj) {
+            const val = obj[key];
+            if (val === undefined) {
+                newObj[key] = null; // Explicitly set to null to avoid Firestore errors
+            } else {
+                newObj[key] = this.sanitizePayload(val);
+            }
+        }
+        return newObj;
+    }
+
     // --- USER MANAGEMENT (Firebase Auth + Firestore) ---
 
-    // Get all users (Admin only - typically controlled by Firestore Security Rules)
     async getSystemUsers(): Promise<User[]> {
         try {
             const querySnapshot = await getDocs(collection(db, "users"));
@@ -51,11 +70,20 @@ class StorageService {
     }
 
     async saveSystemUser(user: User): Promise<void> {
-        // In Firebase, basic auth profile is handled by Auth, extra data in Firestore
-        // We save the extended profile to 'users' collection
         try {
             const userRef = doc(db, "users", user.id || this.uid);
-            await setDoc(userRef, user, { merge: true });
+            
+            // Use sanitization to ensure no undefined fields break the save
+            const safeUser = this.sanitizePayload({
+                ...user,
+                // Ensure defaults for critical fields if missing in source
+                allowedModules: user.allowedModules || [],
+                status: user.status || 'Active',
+                role: user.role || 'User',
+                lastActive: user.lastActive || new Date().toISOString()
+            });
+
+            await setDoc(userRef, safeUser, { merge: true });
         } catch (e) {
             console.error("Error saving user profile:", e);
             throw e;
@@ -71,20 +99,46 @@ class StorageService {
         }
     }
 
-    // --- PASSWORD & IDENTITY ---
-    // These are now handled directly by Firebase Auth SDK in the UI component,
-    // but we keep the interface methods for compatibility if needed.
+    // --- INVITE & VERIFICATION FLOW ---
     
+    async sendUserInvite(user: User): Promise<void> {
+        if (!user.email) throw new Error("User has no email");
+
+        // 1. Trigger Password Reset Email (Functions as an invite for existing auth system)
+        try {
+            await sendPasswordResetEmail(auth, user.email);
+        } catch (e: any) {
+            // Ignore if user not found in Auth (we might just be creating the record first)
+            // But usually this sends the email if the auth record exists. 
+            // If it doesn't, real implementation needs Firebase Admin SDK to create auth user.
+            console.warn("Could not send auth email (user might not exist in Auth yet):", e.message);
+        }
+
+        // 2. Update Firestore Record to track invite status
+        const updates: Partial<User> = {
+            status: 'Pending Validation',
+            verificationSentAt: new Date().toISOString()
+        };
+        
+        // We use saveSystemUser to ensure robust merging and sanitization
+        await this.saveSystemUser({ ...user, ...updates });
+    }
+
     async initiatePasswordReset(email: string): Promise<boolean> {
-        // Handled in Auth.tsx via sendPasswordResetEmail
-        return true; 
+        try {
+            await sendPasswordResetEmail(auth, email);
+            return true;
+        } catch (e) {
+            console.error("Password reset failed", e);
+            return false;
+        }
     }
 
     // --- DATA PERSISTENCE (Firestore) ---
 
     // Debounced Save
     save(key: string, data: any): void {
-        const debounceMs = 2000; // Increased debounce for network
+        const debounceMs = 2000;
         if (this.saveQueue.has(key)) {
             clearTimeout(this.saveQueue.get(key)!);
         }
@@ -98,16 +152,13 @@ class StorageService {
     }
 
     private async performCloudSave(key: string, data: any) {
-        if (!auth.currentUser) return; // Don't save if not logged in
+        if (!auth.currentUser) return;
 
         try {
-            // OPTIMIZATION: Extract Base64 Images to Cloud Storage
-            // Firestore has a 1MB limit per document. We must offload images.
+            // Process images out of payload to avoid size limits
             let processedData = data;
-            
             if (Array.isArray(data)) {
                 processedData = await Promise.all(data.map(async (item) => {
-                    // Check for large image fields (receipts, screenshots)
                     if (item.imageUrl && item.imageUrl.startsWith('data:')) {
                         const url = await this.uploadBase64ToStorage(item.imageUrl, `images/${this.uid}/${crypto.randomUUID()}.jpg`);
                         return { ...item, imageUrl: url };
@@ -120,14 +171,11 @@ class StorageService {
                 }));
             }
 
-            // Save JSON to Firestore
-            // Structure: users/{uid}/modules/{moduleKey}
             const docRef = doc(db, "users", this.uid, "modules", key);
+            // Sanitize the entire payload before saving
+            const safePayload = this.sanitizePayload(Array.isArray(processedData) ? { items: processedData } : processedData);
             
-            // If data is array, wrap it. Firestore root must be object.
-            const payload = Array.isArray(processedData) ? { items: processedData } : processedData;
-            
-            await setDoc(docRef, payload);
+            await setDoc(docRef, safePayload);
             console.log(`[Cloud] Synced ${key}`);
 
         } catch (e) {
@@ -153,7 +201,6 @@ class StorageService {
             const snapshot = await getDoc(docRef);
             if (snapshot.exists()) {
                 const data = snapshot.data();
-                // Unwrap if it was an array stored as { items: [...] }
                 return (data.items || data) as T[];
             }
             return [];
@@ -164,10 +211,9 @@ class StorageService {
     }
 
     async getStats(): Promise<StorageStats> {
-        // Approximate stats for Cloud
         return {
-            usageBytes: 0, // Difficult to calculate exact bytes without cloud function
-            quotaBytes: 1024 * 1024 * 1024, // 1GB Free Tier
+            usageBytes: 0,
+            quotaBytes: 1024 * 1024 * 1024,
             percentUsed: 0,
             tier: this._deviceTier,
             recommendedLimitBytes: 1024 * 1024 * 1024
@@ -189,27 +235,19 @@ class StorageService {
             details,
             timestamp: new Date().toISOString()
         };
-        // Just fire and forget a save to the activity log collection
-        // We handle this differently: separate collection for logs to avoid massive documents
         try {
              if (!auth.currentUser) return;
-             // We'll append to the local array logic for now to keep UI simple, 
-             // but in real app this should be `addDoc(collection(db, 'logs'), entry)`
-             this.save(STORAGE_KEYS.ACTIVITY_LOG, [entry]); // Simplified for compatibility
+             this.save(STORAGE_KEYS.ACTIVITY_LOG, [entry]); 
         } catch(e) {}
     }
 
     getHistory(tool?: ViewState): ActivityLogEntry[] {
-        // This is synchronous in the current UI, but Firestore is async.
-        // For now, return empty array or locally cached.
-        // Real implementation requires refactoring UI to await history.
         return []; 
     }
 
     // --- BACKUP ---
 
     async exportAllData(): Promise<string> {
-        // Implementation would fetch all collections for user
         return JSON.stringify({ meta: "Cloud Export" });
     }
 

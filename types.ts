@@ -19,6 +19,8 @@ export type DeviceTier = 'High-End' | 'Mid-Range' | 'Low-End';
 
 export type UserRole = 'Admin' | 'User' | 'Viewer';
 
+export type UserStatus = 'Active' | 'Suspended' | 'Pending Validation';
+
 export interface StorageStats {
   usageBytes: number;
   quotaBytes: number;
@@ -44,8 +46,10 @@ export interface User {
   isPhoneVerified?: boolean; // New
   resetToken?: string; // New: For password reset
   resetTokenExpiry?: number; // New
+  verificationSentAt?: string; // New: Track when invite was sent
   storageProvider?: StorageProviderType;
   role?: UserRole;
+  status?: UserStatus; // New: Active/Suspended
   allowedModules?: ViewState[]; // Access Control List
   department?: string;
   lastActive?: string;

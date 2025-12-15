@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { ReceiptData, IntegrationAccount, BankTransaction, ReconciliationSuggestion, ViewState, AppSettings } from '../types';
 import { analyzeReceipt, parseBankStatement, suggestMatches, extractReceiptsFromZip, analyzeReceiptBatch } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square, FileArchive, PlayCircle, Coins } from 'lucide-react';
+import { Upload, CheckCircle2, AlertCircle, Loader2, DollarSign, Calendar, FileText, RefreshCw, Plus, X, FileSpreadsheet, FileJson, AlertTriangle, Calculator, Scale, Trash2, Tag, Camera, ClipboardPaste, SlidersHorizontal, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, MessageSquare, Sparkles, ArrowUpDown, Percent, Layers, ListChecks, Zap, Link as LinkIcon, ArrowRight, Download, MoreHorizontal, Table, SplitSquareVertical, ShieldCheck, HelpCircle, Filter, Check, XCircle, MousePointerClick, ExternalLink, Search, Replace, CheckSquare, Square, FileArchive, PlayCircle, Coins, PieChart as PieIcon, TrendingUp, BarChart3, Binary } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, ComposedChart, Line } from 'recharts';
 import JSZip from 'jszip';
 import { ProcessingStatus } from './ProcessingStatus';
@@ -68,6 +68,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
   const [preview, setPreview] = useState<string | null>(null);
   const [analyzedData, setAnalyzedData] = useState<ReceiptData | null>(null);
   const [showRatesModal, setShowRatesModal] = useState(false);
+  const [ledgerViewMode, setLedgerViewMode] = useState<'list' | 'analytics'>('list');
   
   // Receipt Details Modal
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptData | null>(null);
@@ -96,7 +97,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
   const [showColumnOptions, setShowColumnOptions] = useState(false);
 
   // Reconciliation
-  const [reconcileView, setReconcileView] = useState<'split' | 'unified'>('split');
+  const [reconcileView, setReconcileView] = useState<'split' | 'unified' | 'analytics'>('split');
   const [reconcileFilter, setReconcileFilter] = useState<'all' | 'unmatched' | 'matched'>('unmatched');
   const [isMagicMatching, setIsMagicMatching] = useState(false);
   const [isBankAnalyzing, setIsBankAnalyzing] = useState(false); // Bank Processing
@@ -131,22 +132,49 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
       }, 0);
   }, [receipts, getRate]);
 
-  const chartData = useMemo(() => {
-    return receipts.reduce((acc: any[], r) => {
-      const existing = acc.find(item => item.name === r.category);
-      // Normalize currency for chart
-      const rate = getRate(r.currency);
-      const convertedAmount = r.amount * rate;
+  // Aggregated Data for Analytics (Ledger)
+  const ledgerAnalytics = useMemo(() => {
+      const byCategory: Record<string, number> = {};
+      const byMonth: Record<string, number> = {};
+      const byVendor: Record<string, number> = {};
 
-      if (existing) {
-        existing.value += convertedAmount;
-        existing.count += 1;
-      } else {
-        acc.push({ name: r.category, value: convertedAmount, count: 1 });
-      }
-      return acc;
-    }, []);
-  }, [receipts, settings.exchangeRates, getRate]);
+      receipts.forEach(r => {
+          const amount = r.amount * getRate(r.currency);
+          // Category
+          byCategory[r.category] = (byCategory[r.category] || 0) + amount;
+          // Month
+          const month = r.date.substring(0, 7); // YYYY-MM
+          byMonth[month] = (byMonth[month] || 0) + amount;
+          // Vendor
+          byVendor[r.vendor] = (byVendor[r.vendor] || 0) + amount;
+      });
+
+      return {
+          categoryData: Object.entries(byCategory).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value),
+          monthData: Object.entries(byMonth).map(([name, value]) => ({ name, value })).sort((a,b) => a.name.localeCompare(b.name)),
+          vendorData: Object.entries(byVendor).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value).slice(0, 10)
+      };
+  }, [receipts, getRate]);
+
+  // Aggregated Data for Analytics (Reconciliation)
+  const reconciliationAnalytics = useMemo(() => {
+      // Reconciled Expenses by Category
+      const reconciledByCategory: Record<string, number> = {};
+      
+      bankTransactions.forEach(tx => {
+          if (tx.matchedReceiptId) {
+              const r = receipts.find(r => r.id === tx.matchedReceiptId);
+              if (r) {
+                  const amt = Math.abs(tx.amount) * getRate(tx.currency);
+                  reconciledByCategory[r.category] = (reconciledByCategory[r.category] || 0) + amt;
+              }
+          }
+      });
+
+      return {
+          reconciledByCategory: Object.entries(reconciledByCategory).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value),
+      };
+  }, [bankTransactions, receipts, getRate]);
 
   // Enhanced Reconciliation Stats Calculation
   const reconciliationStats = useMemo(() => {
@@ -380,67 +408,98 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
 
   // --- RECONCILIATION LOGIC ---
 
-  const findProgrammaticMatches = () => {
+  const runProgrammaticReconciliation = () => {
       let exactMatchesFound = 0;
-      onUpdateBankTransactions(prev => prev.map(tx => {
+      let matchedTxIds = new Set<string>();
+      let matchedReceiptIds = new Set<string>();
+
+      // Prepare map for receipts to avoid O(N^2)
+      // Key: amount (rounded)
+      const receiptsByAmount: Record<string, ReceiptData[]> = {};
+      receipts.forEach(r => {
+          if (bankTransactions.some(t => t.matchedReceiptId === r.id)) return; // Skip already matched receipts
+          const key = Math.round(r.amount).toString(); // Round for loose bucket
+          if (!receiptsByAmount[key]) receiptsByAmount[key] = [];
+          receiptsByAmount[key].push(r);
+      });
+
+      // Pass 1: Strict Programmatic Matching
+      const newTxs = bankTransactions.map(tx => {
           if (tx.matchedReceiptId) return tx; // Already matched
           
-          const match = receipts.find(r => {
-               // 1. Exact Amount (within small float variance, handle multi-currency loosely or strictly?)
-               // Ideally we match by original currency if possible, or converted if close.
-               // For simplicity, let's assume same currency matches are prioritized.
-               
-               if (tx.currency !== r.currency) return false; // Strict currency match for programmatic
+          const potentialReceipts = receiptsByAmount[Math.round(Math.abs(tx.amount)).toString()] || [];
+          
+          const match = potentialReceipts.find(r => {
+               if (matchedReceiptIds.has(r.id)) return false;
 
+               // Rule 1: Currency Match
+               if (tx.currency !== r.currency) return false;
+
+               // Rule 2: Amount Match (within 0.05)
                const amtMatch = Math.abs(Math.abs(tx.amount) - r.amount) < 0.05;
-               // 2. Date within 3 days
+               
+               // Rule 3: Date Vicinity (within 5 days)
                const d1 = new Date(tx.date);
                const d2 = new Date(r.date);
                const dayDiff = Math.abs((d1.getTime() - d2.getTime()) / (1000 * 3600 * 24));
-               const dateMatch = dayDiff <= 3;
-               // 3. Not already matched
-               const alreadyMatched = prev.some(t => t.matchedReceiptId === r.id);
-               return amtMatch && dateMatch && !alreadyMatched;
+               const dateMatch = dayDiff <= 5;
+
+               return amtMatch && dateMatch;
           });
 
           if (match) {
               exactMatchesFound++;
+              matchedTxIds.add(tx.id);
+              matchedReceiptIds.add(match.id);
               return { 
                   ...tx, 
                   matchedReceiptId: match.id, 
-                  status: 'Reconciled', 
-                  matchType: 'Exact',
+                  status: 'Reconciled' as const, 
+                  matchType: 'Exact' as const,
                   aiSuggestion: 'Programmatic Exact Match (Amount & Date)' 
               };
           }
           return tx;
-      }));
-      return exactMatchesFound;
+      });
+
+      return { newTxs, exactMatchesFound };
   };
 
   const handleMagicMatch = async () => {
       setIsMagicMatching(true);
       try {
-          const exactCount = findProgrammaticMatches();
-          // Find leftovers
-          const unmatchedTxs = bankTransactions.filter(t => !t.matchedReceiptId);
-          if(unmatchedTxs.length === 0) {
-              alert(exactCount > 0 ? `Matched ${exactCount} items perfectly. All done!` : "All transactions already matched.");
-              setIsMagicMatching(false);
-              return;
+          // 1. Run Programmatic First
+          const { newTxs, exactMatchesFound } = runProgrammaticReconciliation();
+          
+          // 2. Identify remaining unmatched
+          const unmatchedTxs = newTxs.filter(t => !t.matchedReceiptId);
+          
+          // 3. If unmatched exist, run AI
+          let aiMatchesFound = 0;
+          let suggestions: ReconciliationSuggestion[] = [];
+          
+          if (unmatchedTxs.length > 0 && receipts.length > 0) {
+              const unmatchedReceipts = receipts.filter(r => !newTxs.some(t => t.matchedReceiptId === r.id));
+              suggestions = await suggestMatches(unmatchedTxs, unmatchedReceipts);
+              aiMatchesFound = suggestions.length;
           }
 
-          const suggestions = await suggestMatches(unmatchedTxs, receipts);
-          
+          // Update State
+          if (exactMatchesFound > 0) {
+              onUpdateBankTransactions(newTxs);
+          }
+
           if (suggestions.length > 0) {
               setMatchSuggestions(suggestions);
               setShowMatchReview(true);
           } else {
-              if (exactCount > 0) alert(`Found ${exactCount} exact matches. No fuzzy AI matches found.`);
+              if (exactMatchesFound > 0) alert(`Auto-reconciled ${exactMatchesFound} items based on exact rules. No further AI matches found.`);
               else alert("No matches found.");
           }
+
       } catch (e) {
           console.error("Magic Match Failed", e);
+          alert("Reconciliation failed.");
       } finally {
           setIsMagicMatching(false);
       }
@@ -502,9 +561,9 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
 
   // --- RENDER HELPERS ---
   const renderMatchBadge = (type?: string) => {
-      if (type === 'Exact') return <span className="text-[10px] font-bold bg-emerald-500 text-black px-2 py-0.5 rounded-full">EXACT</span>;
-      if (type === 'AI') return <span className="text-[10px] font-bold bg-purple-500 text-white px-2 py-0.5 rounded-full">AI</span>;
-      if (type === 'Manual') return <span className="text-[10px] font-bold bg-blue-500 text-white px-2 py-0.5 rounded-full">MANUAL</span>;
+      if (type === 'Exact') return <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1"><Binary className="w-3 h-3"/> RULE MATCH</span>;
+      if (type === 'AI') return <span className="text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full flex items-center gap-1"><Sparkles className="w-3 h-3"/> AI MATCH</span>;
+      if (type === 'Manual') return <span className="text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full flex items-center gap-1"><MousePointerClick className="w-3 h-3"/> MANUAL</span>;
       return null;
   };
 
@@ -589,34 +648,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
           </div>
       )}
 
-      {/* SEARCH AND REPLACE TOOLBAR */}
-      {showSearchReplace && (
-          <div className="bg-zinc-900 border border-zinc-700 p-4 rounded-xl flex flex-wrap items-center gap-4 animate-in slide-in-from-top-2 mb-4">
-              <span className="text-sm font-bold text-white flex items-center gap-2"><Replace className="w-4 h-4" /> Find & Replace</span>
-              <select 
-                value={searchField} 
-                onChange={(e) => setSearchField(e.target.value as keyof ReceiptData)}
-                className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-              >
-                  <option value="vendor">Vendor</option>
-                  <option value="category">Category</option>
-                  <option value="description">Description</option>
-                  <option value="notes">Notes</option>
-              </select>
-              <div className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5">
-                  <Search className="w-3 h-3 text-zinc-500" />
-                  <input value={findText} onChange={e => setFindText(e.target.value)} placeholder="Find..." className="bg-transparent text-sm text-white focus:outline-none w-32" />
-              </div>
-              <div className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5">
-                  <ArrowRight className="w-3 h-3 text-zinc-500" />
-                  <input value={replaceText} onChange={e => setReplaceText(e.target.value)} placeholder="Replace with..." className="bg-transparent text-sm text-white focus:outline-none w-32" />
-              </div>
-              <button onClick={handleSearchReplace} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors">Apply Replace</button>
-              <button onClick={() => setShowSearchReplace(false)} className="text-zinc-500 hover:text-white ml-auto"><X className="w-4 h-4"/></button>
-          </div>
-      )}
-
-      {/* RECEIPT DETAIL MODAL */}
+      {/* RECEIPT DETAIL MODAL (Keep existing) */}
       {selectedReceipt && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
               <div className="bg-zinc-950 border border-zinc-800 w-full max-w-4xl h-[85vh] rounded-3xl shadow-2xl flex flex-col md:flex-row overflow-hidden">
@@ -736,7 +768,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                         onChange={handleFileUpload} 
                     />
                 </div>
-                {/* Single Edit Form (Only shows if single file upload) */}
+                {/* Single Edit Form */}
                 {analyzedData && (
                      <div className="bg-black/40 p-5 rounded-2xl border border-white/10 space-y-5 animate-in slide-in-from-left-2">
                          <div className="flex items-center justify-between border-b border-white/5 pb-3">
@@ -752,80 +784,122 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                          <button onClick={() => { onAddReceipt(analyzedData); setAnalyzedData(null); setPreview(null); }} className="w-full bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-500">Save</button>
                      </div>
                  )}
+                 {/* Aggregated Quick Stats (Mini) */}
+                 <div className="space-y-3">
+                     <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Top Categories</h4>
+                     {ledgerAnalytics.categoryData.slice(0, 4).map((cat, i) => (
+                         <div key={i} className="flex justify-between items-center text-xs">
+                             <span className="text-zinc-400">{cat.name}</span>
+                             <span className="text-white font-mono">{cat.value.toFixed(0)}</span>
+                         </div>
+                     ))}
+                 </div>
             </div>
 
             <div className="lg:col-span-8 flex flex-col gap-8">
-                 {/* Chart - Dual Axis for Count and Amount */}
-                 <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl p-6 h-64 shadow-xl">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={chartData}>
-                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#71717a', fontSize: 12}} dy={10} />
-                            <YAxis yAxisId="left" hide />
-                            <YAxis yAxisId="right" orientation="right" hide />
-                            <Tooltip 
-                                cursor={{fill: 'rgba(255,255,255,0.05)'}} 
-                                contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a', borderRadius: '8px', color: '#fff'}} 
-                                formatter={(value:any, name:any) => [name === 'count' ? value : `${value.toFixed(0)} ${settings.currency}`, name === 'count' ? 'Items' : 'Total']}
-                            />
-                            <Bar yAxisId="left" dataKey="value" fill="#6366f1" radius={[6,6,0,0]} barSize={40} name="amount" />
-                            <Line yAxisId="right" type="monotone" dataKey="count" stroke="#10b981" strokeWidth={2} dot={{fill: '#10b981', r: 3}} name="count" />
-                        </ComposedChart>
-                    </ResponsiveContainer>
+                 {/* View Toggle */}
+                 <div className="flex justify-end mb-[-20px] relative z-10">
+                     <div className="bg-zinc-900 p-1 rounded-xl border border-zinc-800 flex gap-1">
+                         <button onClick={() => setLedgerViewMode('list')} className={`p-2 rounded-lg transition-colors ${ledgerViewMode === 'list' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}><ListChecks className="w-4 h-4" /></button>
+                         <button onClick={() => setLedgerViewMode('analytics')} className={`p-2 rounded-lg transition-colors ${ledgerViewMode === 'analytics' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}><BarChart3 className="w-4 h-4" /></button>
+                     </div>
                  </div>
-                 
-                 {/* Table */}
-                 <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl flex-1 overflow-hidden flex flex-col shadow-xl min-h-[400px]">
-                     <div className="p-4 border-b border-white/5 flex justify-between items-center bg-white/5">
-                         <h3 className="text-white font-semibold flex items-center gap-2"><ListChecks className="w-4 h-4 text-zinc-400"/> Recent Transactions</h3>
-                         <div className="flex gap-2">
-                            <button onClick={() => setShowSearchReplace(!showSearchReplace)} className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors" title="Find & Replace"><Replace className="w-4 h-4"/></button>
-                            <button onClick={() => setShowColumnOptions(!showColumnOptions)} className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"><SlidersHorizontal className="w-4 h-4" /></button>
+
+                 {ledgerViewMode === 'analytics' ? (
+                     <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl p-6 shadow-xl space-y-8 animate-in fade-in">
+                         <div className="h-64">
+                             <h4 className="text-sm font-bold text-white mb-4">Expenses by Month</h4>
+                             <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={ledgerAnalytics.monthData}>
+                                    <XAxis dataKey="name" tick={{fill:'#71717a', fontSize:10}} />
+                                    <Tooltip contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a'}} formatter={(value:any) => `${value.toFixed(0)} ${settings.currency}`} />
+                                    <Bar dataKey="value" fill="#6366f1" radius={[4,4,0,0]} />
+                                </BarChart>
+                             </ResponsiveContainer>
+                         </div>
+                         <div className="grid grid-cols-2 gap-6 h-64">
+                             <div>
+                                 <h4 className="text-sm font-bold text-white mb-4">By Category</h4>
+                                 <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                        <Pie data={ledgerAnalytics.categoryData} innerRadius={40} outerRadius={60} dataKey="value" paddingAngle={2}>
+                                            {ledgerAnalytics.categoryData.map((entry, index) => (
+                                                <Cell key={`cell-${index}`} fill={['#6366f1', '#a855f7', '#ec4899', '#10b981'][index % 4]} />
+                                            ))}
+                                        </Pie>
+                                        <Tooltip contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a'}} />
+                                        <Legend verticalAlign="middle" align="right" layout="vertical" />
+                                    </PieChart>
+                                 </ResponsiveContainer>
+                             </div>
+                             <div>
+                                 <h4 className="text-sm font-bold text-white mb-4">Top Vendors</h4>
+                                 <div className="space-y-2 overflow-y-auto max-h-full pr-2 custom-scrollbar">
+                                     {ledgerAnalytics.vendorData.map((v, i) => (
+                                         <div key={i} className="flex justify-between items-center p-2 bg-black/20 rounded border border-white/5">
+                                             <span className="text-xs text-zinc-300 truncate w-32" title={v.name}>{v.name}</span>
+                                             <span className="text-xs font-mono text-white">{v.value.toFixed(0)}</span>
+                                         </div>
+                                     ))}
+                                 </div>
+                             </div>
                          </div>
                      </div>
-                     <div className="overflow-auto flex-1 custom-scrollbar">
-                         <table className="w-full text-left text-sm text-zinc-400 border-collapse">
-                             <thead className="bg-zinc-900/80 text-zinc-500 sticky top-0 backdrop-blur-md z-10">
-                                 <tr>
-                                     {columns.filter(c=>c.visible).map(c => (
-                                         <th key={c.id} onClick={() => c.sortable && handleSort(c.id)} className={`p-4 font-medium text-xs uppercase tracking-wider ${c.sortable ? 'cursor-pointer hover:text-zinc-300 transition-colors' : ''}`}>
-                                             <div className="flex items-center gap-2">{c.label} {c.sortable && <ArrowUpDown className="w-3 h-3 opacity-50" />}</div>
-                                         </th>
-                                     ))}
-                                 </tr>
-                             </thead>
-                             <tbody className="divide-y divide-white/5">
-                                 {sortedReceipts.map(r => (
-                                     <tr key={r.id} className="hover:bg-white/5 transition-colors group">
+                 ) : (
+                     // Ledger List View
+                     <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl flex-1 overflow-hidden flex flex-col shadow-xl min-h-[400px]">
+                         <div className="p-4 border-b border-white/5 flex justify-between items-center bg-white/5">
+                             <h3 className="text-white font-semibold flex items-center gap-2"><ListChecks className="w-4 h-4 text-zinc-400"/> Recent Transactions</h3>
+                             <div className="flex gap-2">
+                                <button onClick={() => setShowSearchReplace(!showSearchReplace)} className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors" title="Find & Replace"><Replace className="w-4 h-4"/></button>
+                                <button onClick={() => setShowColumnOptions(!showColumnOptions)} className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"><SlidersHorizontal className="w-4 h-4" /></button>
+                             </div>
+                         </div>
+                         <div className="overflow-auto flex-1 custom-scrollbar">
+                             <table className="w-full text-left text-sm text-zinc-400 border-collapse">
+                                 <thead className="bg-zinc-900/80 text-zinc-500 sticky top-0 backdrop-blur-md z-10">
+                                     <tr>
                                          {columns.filter(c=>c.visible).map(c => (
-                                             <td key={c.id} className="p-4">
-                                                 {c.id === 'amount' ? <span className="text-white font-mono font-medium">{r.amount.toFixed(2)} {r.currency}</span> : 
-                                                  c.id === 'link' ? <button onClick={() => setSelectedReceipt(r)} className="text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 p-1.5 rounded-lg border border-indigo-500/20"><Eye className="w-3.5 h-3.5" /></button> :
-                                                  c.id === 'actions' ? <button onClick={() => onRemoveReceipt && onRemoveReceipt(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button> :
-                                                  String(r[c.id as keyof ReceiptData] || '')}
-                                             </td>
+                                             <th key={c.id} onClick={() => c.sortable && handleSort(c.id)} className={`p-4 font-medium text-xs uppercase tracking-wider ${c.sortable ? 'cursor-pointer hover:text-zinc-300 transition-colors' : ''}`}>
+                                                 <div className="flex items-center gap-2">{c.label} {c.sortable && <ArrowUpDown className="w-3 h-3 opacity-50" />}</div>
+                                             </th>
                                          ))}
                                      </tr>
-                                 ))}
-                             </tbody>
-                             {/* Ledger Footer Total */}
-                             <tfoot className="bg-zinc-900/80 backdrop-blur-md border-t border-white/10">
-                                 <tr>
-                                     <td colSpan={columns.filter(c=>c.visible).length} className="p-4 text-right">
-                                         <span className="text-xs text-zinc-500 mr-2 uppercase font-bold tracking-wider">Total Ledger Value:</span>
-                                         <span className="text-white font-mono font-bold text-lg">{totalLedgerValue.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-sm text-zinc-500">{settings.currency}</span></span>
-                                     </td>
-                                 </tr>
-                             </tfoot>
-                         </table>
+                                 </thead>
+                                 <tbody className="divide-y divide-white/5">
+                                     {sortedReceipts.map(r => (
+                                         <tr key={r.id} className="hover:bg-white/5 transition-colors group">
+                                             {columns.filter(c=>c.visible).map(c => (
+                                                 <td key={c.id} className="p-4">
+                                                     {c.id === 'amount' ? <span className="text-white font-mono font-medium">{r.amount.toFixed(2)} {r.currency}</span> : 
+                                                      c.id === 'link' ? <button onClick={() => setSelectedReceipt(r)} className="text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 p-1.5 rounded-lg border border-indigo-500/20"><Eye className="w-3.5 h-3.5" /></button> :
+                                                      c.id === 'actions' ? <button onClick={() => onRemoveReceipt && onRemoveReceipt(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button> :
+                                                      String(r[c.id as keyof ReceiptData] || '')}
+                                                 </td>
+                                             ))}
+                                         </tr>
+                                     ))}
+                                 </tbody>
+                                 {/* Ledger Footer Total */}
+                                 <tfoot className="bg-zinc-900/80 backdrop-blur-md border-t border-white/10">
+                                     <tr>
+                                         <td colSpan={columns.filter(c=>c.visible).length} className="p-4 text-right">
+                                             <span className="text-xs text-zinc-500 mr-2 uppercase font-bold tracking-wider">Total Ledger Value:</span>
+                                             <span className="text-white font-mono font-bold text-lg">{totalLedgerValue.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-sm text-zinc-500">{settings.currency}</span></span>
+                                         </td>
+                                     </tr>
+                                 </tfoot>
+                             </table>
+                         </div>
                      </div>
-                 </div>
+                 )}
             </div>
         </div>
       )}
 
       {activeTab === 'reconciliation' && (
           <div className="flex flex-col h-full gap-8 animate-in fade-in slide-in-from-right-4 duration-500 relative">
-              {/* RECONCILIATION CONTROL CENTER (Enhanced Dashboard) */}
+              {/* RECONCILIATION CONTROL CENTER */}
               <div className="bg-zinc-900/60 border border-white/5 rounded-3xl p-6 shadow-xl relative overflow-hidden">
                   <div className="absolute top-0 right-0 p-32 bg-indigo-500/5 blur-[100px] rounded-full pointer-events-none" />
                   
@@ -921,8 +995,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                                 {isMagicMatching ? <Loader2 className="w-5 h-5 animate-spin"/> : <Wand2 className="w-5 h-5" />}
                                 {isMagicMatching ? "Reconciling..." : "Run Auto-Reconcile"}
                             </button>
-                            <p className="text-[10px] text-zinc-500 mt-2 text-center w-full">
-                                Requires Bank Feed & Receipts
+                            <p className="text-[10px] text-zinc-500 mt-2 text-center w-full leading-tight">
+                                1. Exact Match (Rules)<br/>2. AI Fuzzy Match
                             </p>
                       </div>
                   </div>
@@ -934,6 +1008,7 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                        <div className="bg-black/40 p-1 rounded-xl border border-white/5 flex gap-1">
                            <button onClick={() => setReconcileView('split')} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${reconcileView === 'split' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}><SplitSquareVertical className="w-4 h-4" /> Split View</button>
                            <button onClick={() => setReconcileView('unified')} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${reconcileView === 'unified' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}><Table className="w-4 h-4" /> Unified Report</button>
+                           <button onClick={() => setReconcileView('analytics')} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${reconcileView === 'analytics' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}><BarChart3 className="w-4 h-4" /> Insights</button>
                        </div>
                        
                        <div className="h-8 w-px bg-white/10 mx-2"></div>
@@ -947,7 +1022,46 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
               </div>
 
               {/* Main Workspace */}
-              {reconcileView === 'split' ? (
+              {reconcileView === 'analytics' ? (
+                  <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl p-6 shadow-xl animate-in fade-in">
+                      <div className="grid grid-cols-2 gap-8 h-80">
+                          <div>
+                              <h4 className="text-sm font-bold text-white mb-4">Reconciled Expenses by Category</h4>
+                              <ResponsiveContainer width="100%" height="100%">
+                                  <BarChart data={reconciliationAnalytics.reconciledByCategory} layout="vertical">
+                                      <XAxis type="number" hide />
+                                      <YAxis dataKey="name" type="category" width={100} tick={{fill:'#a1a1aa', fontSize: 11}} />
+                                      <Tooltip contentStyle={{backgroundColor: '#09090b', borderColor: '#27272a'}} />
+                                      <Bar dataKey="value" fill="#10b981" radius={[0,4,4,0]} barSize={24} />
+                                  </BarChart>
+                              </ResponsiveContainer>
+                          </div>
+                          <div>
+                              <h4 className="text-sm font-bold text-white mb-4">Reconciliation Coverage</h4>
+                              <div className="flex flex-col gap-4">
+                                  <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700">
+                                      <div className="text-xs text-zinc-400">Total Transactions</div>
+                                      <div className="text-2xl text-white font-bold">{reconciliationStats.totalTx}</div>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2">
+                                      <div className="bg-emerald-900/20 p-3 rounded-lg border border-emerald-500/20 text-center">
+                                          <div className="text-xs text-emerald-400 font-bold mb-1">Exact</div>
+                                          <div className="text-xl text-white">{reconciliationStats.exactMatches}</div>
+                                      </div>
+                                      <div className="bg-purple-900/20 p-3 rounded-lg border border-purple-500/20 text-center">
+                                          <div className="text-xs text-purple-400 font-bold mb-1">AI</div>
+                                          <div className="text-xl text-white">{reconciliationStats.aiMatches}</div>
+                                      </div>
+                                      <div className="bg-blue-900/20 p-3 rounded-lg border border-blue-500/20 text-center">
+                                          <div className="text-xs text-blue-400 font-bold mb-1">Manual</div>
+                                          <div className="text-xl text-white">{reconciliationStats.manualMatches}</div>
+                                      </div>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+                  </div>
+              ) : reconcileView === 'split' ? (
                   <div className="flex-1 flex flex-col md:flex-row gap-6 min-h-0 relative">
                       {/* Left: Bank Feed */}
                       <div className="flex-1 bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl flex flex-col overflow-hidden shadow-2xl">
@@ -1045,9 +1159,8 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
                       )}
                   </div>
               ) : (
-                  // Unified Report View (Existing with visual tweaks)
+                  // Unified Report View
                   <div className="bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-3xl flex-1 overflow-hidden flex flex-col shadow-2xl animate-in fade-in">
-                       {/* ... Table Header ... */}
                        <div className="overflow-auto flex-1 custom-scrollbar">
                           <table className="w-full text-left text-sm border-collapse">
                               <thead className="bg-zinc-900/90 text-zinc-500 sticky top-0 z-10 font-bold uppercase text-xs tracking-wider backdrop-blur-md shadow-sm">
