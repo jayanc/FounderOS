@@ -17,9 +17,17 @@ export type StorageProviderType = 'LOCAL' | 'GCS' | 'FIREBASE';
 
 export type DeviceTier = 'High-End' | 'Mid-Range' | 'Low-End';
 
-export type UserRole = 'Admin' | 'User' | 'Viewer';
+export type UserRole = 'SuperAdmin' | 'Admin' | 'User' | 'Viewer';
 
 export type UserStatus = 'Active' | 'Suspended' | 'Pending Validation';
+
+export interface Organization {
+    id: string;
+    name: string;
+    subscriptionStatus: 'Active' | 'Trial' | 'Churned';
+    createdAt: string;
+    settings?: AppSettings;
+}
 
 export interface StorageStats {
   usageBytes: number;
@@ -37,19 +45,20 @@ export interface ApiConfig {
 
 export interface User {
   id?: string; // UUID
+  organizationId: string; // CRITICAL: Multi-tenancy Scope
   email: string;
-  phoneNumber?: string; // New
+  phoneNumber?: string;
   name: string;
   password?: string; // Hashed/Encrypted in storage
   mfaVerified: boolean;
-  isEmailVerified?: boolean; // New
-  isPhoneVerified?: boolean; // New
-  resetToken?: string; // New: For password reset
-  resetTokenExpiry?: number; // New
-  verificationSentAt?: string; // New: Track when invite was sent
+  isEmailVerified?: boolean;
+  isPhoneVerified?: boolean;
+  resetToken?: string;
+  resetTokenExpiry?: number;
+  verificationSentAt?: string;
   storageProvider?: StorageProviderType;
   role?: UserRole;
-  status?: UserStatus; // New: Active/Suspended
+  status?: UserStatus;
   allowedModules?: ViewState[]; // Access Control List
   department?: string;
   lastActive?: string;

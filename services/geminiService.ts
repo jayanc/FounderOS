@@ -1,8 +1,12 @@
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { ReceiptData, ActionItem, InboxAnalysisResult, CalendarEvent, IntegrationAccount, BankTransaction, ReconciliationSuggestion, TimesheetEntry, ContractData, InvoiceTemplate } from "../types";
 import JSZip from 'jszip';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Use import.meta.env for Vite support, fallback to process.env for Node/Test environments if needed
+const API_KEY = import.meta.env.VITE_API_KEY || process.env.API_KEY;
+
+const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 const RECEIPT_MODEL = "gemini-2.5-flash";
 const OPS_MODEL = "gemini-2.5-flash";

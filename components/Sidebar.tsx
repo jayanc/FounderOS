@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { ViewState, User } from '../types';
-import { LayoutDashboard, Receipt, MessageSquareMore, BrainCircuit, Settings, LogOut, Clock, FileText, Camera, TrendingUp, LifeBuoy, FileCheck, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Receipt, MessageSquare, BrainCircuit, Settings, LogOut, Clock, FileText, Camera, TrendingUp, LifeBuoy, FileCheck, ShieldAlert } from 'lucide-react';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -18,7 +18,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user,
     { id: ViewState.FINANCE, label: 'Accounting', icon: Receipt, htmlId: 'nav-finance' },
     { id: ViewState.INVOICES, label: 'Invoicing', icon: FileCheck, htmlId: 'nav-invoices' },
     { id: ViewState.PLANNING, label: 'Growth Plan', icon: TrendingUp, htmlId: 'nav-planning' },
-    { id: ViewState.OPS, label: 'Workflow', icon: MessageSquareMore, htmlId: 'nav-ops' },
+    { id: ViewState.OPS, label: 'Workflow', icon: MessageSquare, htmlId: 'nav-ops' },
     { id: ViewState.TIMESHEETS, label: 'Timesheets', icon: Clock, htmlId: 'nav-timesheets' },
     { id: ViewState.CONTRACTS, label: 'Contracts', icon: FileText, htmlId: 'nav-contracts' },
   ];

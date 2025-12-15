@@ -3,17 +3,24 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 
-// TODO: Replace with your actual Firebase Project Configuration
-// You get this from Firebase Console -> Project Settings -> General -> Your Apps
+// Production Configuration
+// In Vite, environment variables prefixed with VITE_ are exposed on import.meta.env
 const firebaseConfig = {
-  apiKey: process.env.API_KEY || "YOUR_FIREBASE_API_KEY", // Using the same env var for convenience in this demo
-  authDomain: "founder-os-demo.firebaseapp.com",
-  projectId: "founder-os-demo",
-  storageBucket: "founder-os-demo.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:123456789:web:abcdef"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
+
+// Validation to ensure keys are loaded
+if (!firebaseConfig.apiKey) {
+  console.error("Firebase Configuration Error: API Key is missing. Ensure you have a .env file with VITE_FIREBASE_API_KEY defined.");
+}
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -22,3 +29,4 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+export const functions = getFunctions(app);

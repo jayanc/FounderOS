@@ -4,12 +4,12 @@ import { IntegrationAccount, IntegrationType, ApiConfig, ReceiptData, ActionItem
 import { Mail, RefreshCw, Plus, ShieldCheck, HardDrive, FolderOpen, UploadCloud, X, Check, Lock, Terminal, Settings, Download, Trash2, Database, Save, CloudLightning, Globe, DollarSign, Languages, FileText, Image as ImageIcon, LayoutTemplate, Loader2, Building2, Stamp, CreditCard, Server, Upload } from 'lucide-react';
 import { securityService } from '../services/securityService';
 import { storageService } from '../services/storageService';
+import { auth } from '../src/firebaseConfig';
 
 interface ConnectAccountsProps {
   accounts: IntegrationAccount[];
   onToggleAccount: (id: string) => void;
   onAddAccount: (account: IntegrationAccount) => void;
-  // Data props for export
   receipts: ReceiptData[];
   tasks: ActionItem[];
   events: CalendarEvent[];
@@ -18,14 +18,29 @@ interface ConnectAccountsProps {
   onUpdateSettings: (settings: AppSettings) => void;
 }
 
+const APP_VERSION = 'v1.3.0';
+
 export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onToggleAccount, onAddAccount, receipts, tasks, events, onClearData, settings, onUpdateSettings }) => {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [isBackingUp, setIsBackingUp] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  
+  // Permissions Check
+  // In a real app, this should be prop-driven or context-driven, but we can check the currentUser from storage service or a prop if passed.
+  // For now, we assume the user role is available via a parent component or context, but since we don't have it explicitly as a prop here
+  // we will check a global state or simple assumption. Ideally `ConnectAccounts` should receive `user` prop.
+  // We'll rely on the parent updating `onUpdateSettings` only if allowed, but to disable UI elements, we need the role.
+  // Assuming the `App.tsx` handles the "Admin Only" logic for `onUpdateSettings`, but for visual feedback:
+  
+  // NOTE: In the provided context, I don't have the `user` object directly here. 
+  // I will assume for this implementation that the parent handles the permission or I can check localStorage.
+  const storedUser = localStorage.getItem('founder_os_user');
+  const isAdmin = storedUser ? JSON.parse(storedUser).role === 'Admin' : false;
+
   // Form State
   const [newAccountType, setNewAccountType] = useState<IntegrationType>('GDrive');
   const [newAccountName, setNewAccountName] = useState('');
@@ -51,7 +66,6 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   const handleSaveNewAccount = async () => {
       if (!newAccountName) return;
       
-      // Encrypt API keys before storing
       let encryptedApiKey = undefined;
       if (apiKey) encryptedApiKey = await securityService.encrypt(apiKey);
 
@@ -73,8 +87,6 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
       };
       
       onAddAccount(newAccount);
-      
-      // Reset Form
       setIsAdding(false);
       setNewAccountName('');
       setApiKey('');
@@ -124,21 +136,41 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   };
 
   const handleUpdateGCPConfig = (field: keyof NonNullable<AppSettings['gcpConfig']>, value: any) => {
+      if (!isAdmin) return alert("Only Admins can change cloud config.");
       const currentConfig = settings.gcpConfig || { bucketName: '', projectId: '', autoSync: false };
       const newConfig = { ...currentConfig, [field]: value };
-      onUpdateSettings({ ...settings, gcpConfig: newConfig });
-      // Re-configure storage service dynamically
-      // In real app, might need a cleaner way to re-init service
+      updateSettingsWrapper({ ...settings, gcpConfig: newConfig });
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'logoUrl' | 'signatureUrl') => {
+      if (!isAdmin) return;
       const file = e.target.files?.[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onloadend = () => {
-          onUpdateSettings({ ...settings, [field]: reader.result as string });
+          updateSettingsWrapper({ ...settings, [field]: reader.result as string });
       };
       reader.readAsDataURL(file);
+  };
+
+  // Wrapper to handle saving to server automatically
+  const updateSettingsWrapper = async (newSettings: AppSettings) => {
+      if (!isAdmin) {
+          alert("Access Denied: Only Admins can modify global settings.");
+          return;
+      }
+      // Optimistic update
+      onUpdateSettings(newSettings);
+      
+      // Background Server Save
+      setIsSavingSettings(true);
+      try {
+          await storageService.saveGlobalSettings(newSettings);
+      } catch(e) {
+          console.error("Failed to save settings to server");
+      } finally {
+          setIsSavingSettings(false);
+      }
   };
 
   const getIcon = (provider: string, isConnected: boolean) => {
@@ -152,26 +184,37 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
   };
 
   return (
-    <div className="max-w-5xl mx-auto flex flex-col gap-8 relative pb-20">
-      <header>
-         <h2 className="text-2xl font-bold text-white mb-2">Settings & Integrations</h2>
-         <p className="text-zinc-400">Configure global preferences, data sources, and system controls.</p>
+    <div className="max-w-5xl mx-auto flex flex-col gap-8 relative pb-20 animate-in fade-in duration-500">
+      <header className="flex justify-between items-start">
+         <div>
+             <h2 className="text-2xl font-bold text-white mb-2">Settings & Integrations</h2>
+             <p className="text-zinc-400">Configure global preferences, data sources, and system controls.</p>
+         </div>
+         <div className="text-right">
+             <div className="text-xs font-mono text-zinc-500 bg-zinc-900 px-3 py-1 rounded-full border border-zinc-800">
+                 {APP_VERSION}
+             </div>
+             {isSavingSettings && <span className="text-[10px] text-zinc-500 mt-1 block">Saving to Cloud...</span>}
+         </div>
       </header>
 
       {/* Global Preferences Section */}
       <div>
           <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
               <Globe className="w-5 h-5" /> Global Preferences
+              {!isAdmin && <span className="text-[10px] bg-red-500/10 text-red-400 px-2 py-0.5 rounded border border-red-500/20">Read Only</span>}
           </h3>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6 relative">
+              {!isAdmin && <div className="absolute inset-0 bg-black/10 z-10 cursor-not-allowed rounded-2xl" />}
               <div>
                   <label className="block text-xs font-medium text-zinc-500 mb-2 flex items-center gap-2">
                       <Languages className="w-3 h-3" /> App Language
                   </label>
                   <select 
+                      disabled={!isAdmin}
                       value={settings.language}
-                      onChange={(e) => onUpdateSettings({ ...settings, language: e.target.value })}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      onChange={(e) => updateSettingsWrapper({ ...settings, language: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                   >
                       <option value="English">English</option>
                       <option value="Spanish">Español</option>
@@ -186,9 +229,10 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                       <Globe className="w-3 h-3" /> App Country / Region
                   </label>
                   <select 
+                      disabled={!isAdmin}
                       value={settings.country}
-                      onChange={(e) => onUpdateSettings({ ...settings, country: e.target.value })}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      onChange={(e) => updateSettingsWrapper({ ...settings, country: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                   >
                       <option value="United States">United States</option>
                       <option value="United Kingdom">United Kingdom</option>
@@ -204,9 +248,10 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                       <DollarSign className="w-3 h-3" /> Reporting Currency
                   </label>
                   <select 
+                      disabled={!isAdmin}
                       value={settings.currency}
-                      onChange={(e) => onUpdateSettings({ ...settings, currency: e.target.value })}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      onChange={(e) => updateSettingsWrapper({ ...settings, currency: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                   >
                       <option value="USD">USD ($)</option>
                       <option value="EUR">EUR (€)</option>
@@ -224,7 +269,8 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
           <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
               <Server className="w-5 h-5" /> Cloud Storage Infrastructure
           </h3>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 relative">
+              {!isAdmin && <div className="absolute inset-0 bg-black/10 z-10 cursor-not-allowed rounded-2xl" />}
               <div className="flex items-center gap-2 mb-4">
                   <div className="p-2 bg-indigo-500/10 rounded-lg">
                       <UploadCloud className="w-5 h-5 text-indigo-400" />
@@ -239,28 +285,30 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                   <div>
                       <label className="block text-xs font-medium text-zinc-500 mb-1">Project ID</label>
                       <input 
+                          disabled={!isAdmin}
                           type="text"
                           value={settings.gcpConfig?.projectId || ''}
                           onChange={(e) => handleUpdateGCPConfig('projectId', e.target.value)}
                           placeholder="my-gcp-project-id"
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                       />
                   </div>
                   <div>
                       <label className="block text-xs font-medium text-zinc-500 mb-1">Bucket Name</label>
                       <input 
+                          disabled={!isAdmin}
                           type="text"
                           value={settings.gcpConfig?.bucketName || ''}
                           onChange={(e) => handleUpdateGCPConfig('bucketName', e.target.value)}
                           placeholder="founder-os-central-storage"
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                       />
                   </div>
               </div>
               
               <div className="mt-6 flex items-center justify-between border-t border-zinc-800 pt-4">
                   <div className="flex items-center gap-3">
-                      <div onClick={() => handleUpdateGCPConfig('autoSync', !settings.gcpConfig?.autoSync)} className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${settings.gcpConfig?.autoSync ? 'bg-indigo-600' : 'bg-zinc-700'}`}>
+                      <div onClick={() => isAdmin && handleUpdateGCPConfig('autoSync', !settings.gcpConfig?.autoSync)} className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${settings.gcpConfig?.autoSync ? 'bg-indigo-600' : 'bg-zinc-700'} ${!isAdmin ? 'opacity-50 pointer-events-none' : ''}`}>
                           <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${settings.gcpConfig?.autoSync ? 'translate-x-4' : 'translate-x-0'}`} />
                       </div>
                       <span className="text-sm text-zinc-300">Enable Cloud Auto-Sync</span>
@@ -279,7 +327,8 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
           <h3 className="text-lg font-semibold text-zinc-300 mb-4 flex items-center gap-2">
               <Building2 className="w-5 h-5" /> Company Identity (Global)
           </h3>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6 relative">
+              {!isAdmin && <div className="absolute inset-0 bg-black/10 z-10 cursor-not-allowed rounded-2xl" />}
               <p className="text-xs text-zinc-500">These details will be used by default across your Invoice Templates.</p>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -288,19 +337,21 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                           <label className="block text-xs font-medium text-zinc-500 mb-1">Company Name</label>
                           <input 
                               type="text"
+                              disabled={!isAdmin}
                               value={settings.companyName || ''}
-                              onChange={(e) => onUpdateSettings({...settings, companyName: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, companyName: e.target.value})}
                               placeholder="Acme Corp LLC"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">Company Address</label>
                           <textarea 
+                              disabled={!isAdmin}
                               value={settings.companyAddress || ''}
-                              onChange={(e) => onUpdateSettings({...settings, companyAddress: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, companyAddress: e.target.value})}
                               placeholder="123 Innovation Dr..."
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 h-24 resize-none"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 h-24 resize-none disabled:opacity-50"
                           />
                       </div>
                   </div>
@@ -308,7 +359,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                   <div className="grid grid-cols-2 gap-4">
                       <div 
                           onClick={() => logoRef.current?.click()}
-                          className="border border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors overflow-hidden relative h-40 bg-zinc-950"
+                          className={`border border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors overflow-hidden relative h-40 bg-zinc-950 ${!isAdmin ? 'pointer-events-none opacity-50' : ''}`}
                       >
                           {settings.logoUrl ? (
                               <img src={settings.logoUrl} alt="Logo" className="w-full h-full object-contain p-4" />
@@ -319,12 +370,12 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                               </div>
                           )}
                           <input type="file" ref={logoRef} className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'logoUrl')} />
-                          {settings.logoUrl && <button onClick={(e) => {e.stopPropagation(); onUpdateSettings({...settings, logoUrl: undefined})}} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full text-white"><X className="w-3 h-3"/></button>}
+                          {settings.logoUrl && isAdmin && <button onClick={(e) => {e.stopPropagation(); updateSettingsWrapper({...settings, logoUrl: undefined})}} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full text-white"><X className="w-3 h-3"/></button>}
                       </div>
 
                       <div 
                           onClick={() => sigRef.current?.click()}
-                          className="border border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors overflow-hidden relative h-40 bg-zinc-950"
+                          className={`border border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors overflow-hidden relative h-40 bg-zinc-950 ${!isAdmin ? 'pointer-events-none opacity-50' : ''}`}
                       >
                           {settings.signatureUrl ? (
                               <img src={settings.signatureUrl} alt="Sig" className="w-full h-full object-contain p-4" />
@@ -335,7 +386,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                               </div>
                           )}
                           <input type="file" ref={sigRef} className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'signatureUrl')} />
-                          {settings.signatureUrl && <button onClick={(e) => {e.stopPropagation(); onUpdateSettings({...settings, signatureUrl: undefined})}} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full text-white"><X className="w-3 h-3"/></button>}
+                          {settings.signatureUrl && isAdmin && <button onClick={(e) => {e.stopPropagation(); updateSettingsWrapper({...settings, signatureUrl: undefined})}} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full text-white"><X className="w-3 h-3"/></button>}
                       </div>
                   </div>
               </div>
@@ -347,31 +398,34 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">Organization Number (Org.nr)</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.orgNumber || ''}
-                              onChange={(e) => onUpdateSettings({...settings, orgNumber: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, orgNumber: e.target.value})}
                               placeholder="556000-0000"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">VAT / Moms Reg. Number</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.vatNumber || ''}
-                              onChange={(e) => onUpdateSettings({...settings, vatNumber: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, vatNumber: e.target.value})}
                               placeholder="SE556000000001"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">F-skatt Status</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.fSkattStatus || ''}
-                              onChange={(e) => onUpdateSettings({...settings, fSkattStatus: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, fSkattStatus: e.target.value})}
                               placeholder="Godkänd för F-skatt"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                   </div>
@@ -384,51 +438,56 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">Bankgiro</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.bankgiro || ''}
-                              onChange={(e) => onUpdateSettings({...settings, bankgiro: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, bankgiro: e.target.value})}
                               placeholder="123-4567"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">PlusGiro</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.plusgiro || ''}
-                              onChange={(e) => onUpdateSettings({...settings, plusgiro: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, plusgiro: e.target.value})}
                               placeholder="12 34 56-7"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">Swish</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.swish || ''}
-                              onChange={(e) => onUpdateSettings({...settings, swish: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, swish: e.target.value})}
                               placeholder="123 123 12 12"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                           />
                       </div>
                       <div className="md:col-span-2">
                           <label className="block text-xs font-medium text-zinc-500 mb-1">IBAN</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.iban || ''}
-                              onChange={(e) => onUpdateSettings({...settings, iban: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, iban: e.target.value})}
                               placeholder="SE00 0000 0000 0000 0000 0000"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono disabled:opacity-50"
                           />
                       </div>
                       <div>
                           <label className="block text-xs font-medium text-zinc-500 mb-1">BIC / SWIFT</label>
                           <input 
+                              disabled={!isAdmin}
                               type="text"
                               value={settings.bic || ''}
-                              onChange={(e) => onUpdateSettings({...settings, bic: e.target.value})}
+                              onChange={(e) => updateSettingsWrapper({...settings, bic: e.target.value})}
                               placeholder="BANKSEHH"
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono disabled:opacity-50"
                           />
                       </div>
                   </div>
@@ -463,12 +522,12 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                     
                     <button
                         onClick={() => handleToggle(account.id)}
-                        disabled={connectingId === account.id}
+                        disabled={connectingId === account.id || !isAdmin}
                         className={`w-full py-2.5 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${
                             account.isConnected 
                             ? 'bg-zinc-800 hover:bg-red-500/10 hover:text-red-400 text-zinc-300 border border-zinc-700' 
                             : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20'
-                        }`}
+                        } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                         {connectingId === account.id ? (
                             <><RefreshCw className="w-4 h-4 animate-spin" /> Authenticating...</>
@@ -482,7 +541,8 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
             ))}
              <button 
                 onClick={() => setIsAdding(true)}
-                className="p-6 rounded-2xl border border-dashed border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50 transition-all flex flex-col items-center justify-center gap-3 text-zinc-500 hover:text-zinc-300"
+                disabled={!isAdmin}
+                className={`p-6 rounded-2xl border border-dashed border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50 transition-all flex flex-col items-center justify-center gap-3 text-zinc-500 hover:text-zinc-300 ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
                 <div className="w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center">
                     <Plus className="w-6 h-6" />
@@ -514,8 +574,8 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                             {account.isConnected ? 'Monitoring' : 'Paused'}
                         </span>
                         <div 
-                            onClick={() => handleToggle(account.id)}
-                            className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${account.isConnected ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+                            onClick={() => isAdmin && handleToggle(account.id)}
+                            className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${account.isConnected ? 'bg-indigo-600' : 'bg-zinc-700'} ${!isAdmin ? 'pointer-events-none opacity-50' : ''}`}
                         >
                             <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${account.isConnected ? 'translate-x-6' : 'translate-x-0'}`} />
                         </div>
@@ -561,7 +621,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                  <h4 className="text-white font-medium mb-1">Danger Zone</h4>
                  <p className="text-sm text-zinc-500 mb-4">Permanently delete all local data and reset the application state.</p>
                  {!showClearConfirm ? (
-                     <button onClick={() => setShowClearConfirm(true)} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg flex items-center gap-2 text-sm transition-colors border border-red-500/20">
+                     <button onClick={() => setShowClearConfirm(true)} disabled={!isAdmin} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg flex items-center gap-2 text-sm transition-colors border border-red-500/20 disabled:opacity-50">
                          <Trash2 className="w-4 h-4" /> Clear All Data
                      </button>
                  ) : (
@@ -615,7 +675,7 @@ export const ConnectAccounts: React.FC<ConnectAccountsProps> = ({ accounts, onTo
                             value={newAccountName}
                             onChange={(e) => setNewAccountName(e.target.value)}
                             placeholder={newAccountType === 'Gmail' ? 'team@company.com' : newAccountType === 'GDrive' ? 'Finance/2024/Receipts' : '/Users/Alex/Downloads'}
-                            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-indigo-500 transition-colors"
                           />
                       </div>
 

@@ -1,0 +1,47 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper to get user data
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper: Check if user belongs to the target organization
+    function belongsToOrg(orgId) {
+      return request.auth != null && getUserData().organizationId == orgId;
+    }
+
+    // Helper: Check if user is SuperAdmin (Optional for advanced features)
+    function isSuperAdmin() {
+      return request.auth != null && getUserData().role == 'SuperAdmin';
+    }
+
+    // 1. USERS COLLECTION
+    // Users can read their own profile.
+    // Admins can read/write users within their same Org.
+    match /users/{userId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || belongsToOrg(resource.data.organizationId));
+      allow write: if request.auth != null && (request.auth.uid == userId || belongsToOrg(resource.data.organizationId)); 
+      // Note: During signup, user creates their own doc, so we allow basic write if auth != null,
+      // but strictly validation logic should be here in prod.
+    }
+
+    // 2. ORGANIZATIONS COLLECTION
+    match /organizations/{orgId} {
+      // Allow read if user belongs to this org
+      allow read: if belongsToOrg(orgId);
+      // Allow creation (signup flow)
+      allow create: if request.auth != null;
+      // Allow update only if Admin of this org
+      allow update: if belongsToOrg(orgId) && getUserData().role == 'Admin';
+
+      // 3. SUB-COLLECTIONS (The Modules)
+      // Generic rule for all module data (receipts, tasks, etc) under the org
+      match /{document=**} {
+        allow read, write: if belongsToOrg(orgId);
+      }
+    }
+  }
+}

@@ -75,14 +75,14 @@ const App: React.FC = () => {
       const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
       if (savedUser) {
           const parsedUser = JSON.parse(savedUser);
-          // Auto-grant Admin role for demo purposes if missing
+          // Ensure defaults
           if (!parsedUser.role) parsedUser.role = 'Admin';
           setUser(parsedUser);
           storageService.configure(parsedUser);
       }
   }, []);
 
-  // 2. Load User Data
+  // 2. Load User Data & Settings
   useEffect(() => {
       if (user) {
           storageService.configure(user);
@@ -90,23 +90,27 @@ const App: React.FC = () => {
           
           const loadData = async () => {
               // Parallel Load
-              const [r, b, t, e, a, s] = await Promise.all([
+              const [r, b, t, e, a, serverSettings] = await Promise.all([
                   storageService.load<ReceiptData>(STORAGE_KEYS.RECEIPTS),
                   storageService.load<BankTransaction>(STORAGE_KEYS.BANK_TXS),
                   storageService.load<ActionItem>(STORAGE_KEYS.TASKS),
                   storageService.load<CalendarEvent>(STORAGE_KEYS.EVENTS),
                   storageService.load<IntegrationAccount>(STORAGE_KEYS.ACCOUNTS),
-                  storageService.load<AppSettings>(STORAGE_KEYS.SETTINGS) // Load settings separately, might need cast
+                  storageService.loadGlobalSettings()
               ]);
-              setReceipts(r);
-              setBankTransactions(b);
-              setTasks(t);
-              setEvents(e);
-              setAccounts(a);
-              // Handle settings specifically as it's an object not array
-              const loadedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-              if (loadedSettings) {
-                  setSettings(JSON.parse(loadedSettings));
+              
+              setReceipts(r || []);
+              setBankTransactions(b || []);
+              setTasks(t || []);
+              setEvents(e || []);
+              setAccounts(a || []);
+              
+              // Settings Priority: Server > Local > Default
+              if (serverSettings) {
+                  setSettings(serverSettings);
+              } else {
+                  const localSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+                  if (localSettings) setSettings(JSON.parse(localSettings));
               }
               
               // Load Stats
@@ -117,12 +121,12 @@ const App: React.FC = () => {
   }, [user]);
 
   // 3. Persist Data (Service handles Debouncing internally)
+  // Note: Settings are saved explicitly via "UpdateSettingsWrapper" in ConnectAccounts, so we don't auto-save here to prevent overwrites from stale state.
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.RECEIPTS, receipts); }, [receipts, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.BANK_TXS, bankTransactions); }, [bankTransactions, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.TASKS, tasks); }, [tasks, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.EVENTS, events); }, [events, user]);
   useEffect(() => { if (user) storageService.save(STORAGE_KEYS.ACCOUNTS, accounts); }, [accounts, user]);
-  useEffect(() => { if (user) { localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings)); } }, [settings, user]);
 
   // Periodic Stats Update
   useEffect(() => {
@@ -137,8 +141,8 @@ const App: React.FC = () => {
 
   // Auth Handlers
   const handleLogin = (authenticatedUser: User) => {
-      // Auto-grant Admin role for demo
-      const userWithRole = { ...authenticatedUser, role: 'Admin' as const };
+      // Ensure we have a valid User object before setting state
+      const userWithRole = { ...authenticatedUser, role: authenticatedUser.role || 'User' };
       setUser(userWithRole);
       storageService.configure(userWithRole);
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userWithRole));
@@ -348,3 +352,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+    

@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
-import { User } from '../types';
-import { auth, db } from '../firebaseConfig';
+import { User, Organization } from '../types';
+import { auth, db } from '../src/firebaseConfig';
 import { 
     signInWithEmailAndPassword, 
     createUserWithEmailAndPassword, 
@@ -10,7 +10,7 @@ import {
     User as FirebaseUser 
 } from "firebase/auth";
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { Lock, Mail, ArrowRight, ShieldCheck, User as UserIcon, RefreshCw, History, AlertTriangle } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, User as UserIcon, RefreshCw, History, AlertTriangle, Building2 } from 'lucide-react';
 
 interface AuthProps {
   onLogin: (user: User) => void;
@@ -21,6 +21,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   
   // Form State
   const [name, setName] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -35,53 +36,55 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
       try {
           if (authMode === 'signup') {
+              if (!companyName) throw new Error("Company name is required for registration.");
+
               const userCredential = await createUserWithEmailAndPassword(auth, email, password);
               const fbUser = userCredential.user;
-              
-              // Update Display Name
               await updateProfile(fbUser, { displayName: name });
 
-              // Create User Document in Firestore
+              // 1. Create Organization
+              const orgId = crypto.randomUUID();
+              const newOrg: Organization = {
+                  id: orgId,
+                  name: companyName,
+                  subscriptionStatus: 'Trial',
+                  createdAt: new Date().toISOString()
+              };
+              await setDoc(doc(db, "organizations", orgId), newOrg);
+
+              // 2. Create Admin User linked to Org
               const newUser: User = {
                   id: fbUser.uid,
+                  organizationId: orgId, // LINKED
                   email: fbUser.email!,
                   name: name,
                   mfaVerified: false,
-                  role: 'Admin', // Default to Admin for first user
-                  storageProvider: 'GCS'
+                  role: 'Admin', // First user is Admin
+                  storageProvider: 'GCS',
+                  status: 'Active'
               };
               
               await setDoc(doc(db, "users", fbUser.uid), newUser);
-              
               onLogin(newUser);
           } 
           else if (authMode === 'login') {
               const userCredential = await signInWithEmailAndPassword(auth, email, password);
               const fbUser = userCredential.user;
               
-              // Fetch extended profile
               const userDoc = await getDoc(doc(db, "users", fbUser.uid));
               
               if (userDoc.exists()) {
                   onLogin(userDoc.data() as User);
               } else {
-                  // Fallback if doc missing
-                  onLogin({
-                      id: fbUser.uid,
-                      email: fbUser.email!,
-                      name: fbUser.displayName || 'User',
-                      mfaVerified: false,
-                      role: 'User'
-                  });
+                  setError("User profile corrupted. Contact support.");
               }
           }
       } catch (err: any) {
           console.error(err);
-          // Map Firebase Errors to User Friendly Messages
           if (err.code === 'auth/invalid-credential') setError("Invalid email or password.");
           else if (err.code === 'auth/email-already-in-use') setError("Email already registered.");
           else if (err.code === 'auth/weak-password') setError("Password should be at least 6 characters.");
-          else setError("Authentication failed. Please try again.");
+          else setError(err.message || "Authentication failed.");
       }
       setIsLoading(false);
   };
@@ -89,7 +92,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const handleForgotPassword = async (e: React.FormEvent) => {
       e.preventDefault();
       if(!email) return setError("Please enter your email.");
-      
       setIsLoading(true);
       try {
           await sendPasswordResetEmail(auth, email);
@@ -112,8 +114,8 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                 <div className="w-14 h-14 bg-gradient-to-tr from-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-lg shadow-indigo-500/20 ring-1 ring-white/10">
                     <ShieldCheck className="text-white w-7 h-7" />
                 </div>
-                <h1 className="text-2xl font-bold text-white tracking-tight">FounderOS Cloud</h1>
-                <p className="text-zinc-500 text-sm mt-2">Secure Cloud Access</p>
+                <h1 className="text-2xl font-bold text-white tracking-tight">FounderOS</h1>
+                <p className="text-zinc-500 text-sm mt-2">Enterprise Operating System</p>
             </div>
 
             <div className="animate-in fade-in slide-in-from-right-4 relative z-10">
@@ -125,17 +127,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-zinc-400 mb-1">Email Address</label>
-                            <div className="relative group">
-                                <Mail className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
-                                <input 
-                                    type="email" 
-                                    required
-                                    value={email}
-                                    onChange={e => setEmail(e.target.value)}
-                                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500 placeholder:text-zinc-700 transition-all"
-                                    placeholder="name@company.com"
-                                />
-                            </div>
+                            <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-4 text-white text-sm focus:outline-none focus:border-indigo-500" placeholder="name@company.com" />
                         </div>
                         {error && <p className="text-red-400 text-xs text-center">{error}</p>}
                         {successMsg && <p className="text-emerald-400 text-xs text-center">{successMsg}</p>}
@@ -150,18 +142,20 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                 ) : (
                     <form onSubmit={handleAuthSubmit} className="space-y-4">
                         {authMode === 'signup' && (
-                            <div className="animate-in slide-in-from-top-2">
-                                <label className="block text-xs font-medium text-zinc-400 mb-1">Full Name</label>
-                                <div className="relative group">
-                                    <UserIcon className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
-                                    <input 
-                                        type="text" 
-                                        required
-                                        value={name}
-                                        onChange={e => setName(e.target.value)}
-                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500 placeholder:text-zinc-700 transition-all"
-                                        placeholder="Alex Founder"
-                                    />
+                            <div className="space-y-4 animate-in slide-in-from-top-2">
+                                <div>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Full Name</label>
+                                    <div className="relative group">
+                                        <UserIcon className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500" />
+                                        <input type="text" required value={name} onChange={e => setName(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500" placeholder="Alex Founder" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Organization Name</label>
+                                    <div className="relative group">
+                                        <Building2 className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500" />
+                                        <input type="text" required value={companyName} onChange={e => setCompanyName(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500" placeholder="Acme Inc." />
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -169,30 +163,16 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                         <div>
                             <label className="block text-xs font-medium text-zinc-400 mb-1">Email Address</label>
                             <div className="relative group">
-                                <Mail className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
-                                <input 
-                                    type="email" 
-                                    required
-                                    value={email}
-                                    onChange={e => setEmail(e.target.value)}
-                                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500 placeholder:text-zinc-700 transition-all"
-                                    placeholder="name@company.com"
-                                />
+                                <Mail className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500" />
+                                <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500" placeholder="name@company.com" />
                             </div>
                         </div>
 
                         <div>
                             <label className="block text-xs font-medium text-zinc-400 mb-1">Password</label>
                             <div className="relative group">
-                                <Lock className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
-                                <input 
-                                    type="password" 
-                                    required
-                                    value={password}
-                                    onChange={e => setPassword(e.target.value)}
-                                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500 placeholder:text-zinc-700 transition-all"
-                                    placeholder="••••••••"
-                                />
+                                <Lock className="absolute left-3 top-2.5 w-4 h-4 text-zinc-500" />
+                                <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-indigo-500" placeholder="••••••••" />
                             </div>
                             {authMode === 'login' && (
                                 <button type="button" onClick={() => setAuthMode('forgot_password')} className="text-[10px] text-indigo-400 hover:underline mt-1 block text-right">
@@ -207,29 +187,15 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                             </div>
                         )}
 
-                        <button 
-                            type="submit" 
-                            disabled={isLoading}
-                            className={`w-full font-medium py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg ${
-                                authMode === 'signup' 
-                                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
-                                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20' 
-                            }`}
-                        >
-                            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin"/> : authMode === 'signup' ? <>Create Account <ArrowRight className="w-4 h-4" /></> : <>Sign In <ArrowRight className="w-4 h-4" /></>}
+                        <button type="submit" disabled={isLoading} className="w-full font-medium py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20">
+                            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin"/> : authMode === 'signup' ? <>Start Free Trial <ArrowRight className="w-4 h-4" /></> : <>Sign In <ArrowRight className="w-4 h-4" /></>}
                         </button>
                     </form>
                 )}
 
                 <div className="mt-6 text-center">
-                    <button 
-                        onClick={() => {
-                            setAuthMode(authMode === 'login' ? 'signup' : 'login');
-                            setError(null);
-                        }}
-                        className="text-xs text-zinc-500 hover:text-white transition-colors"
-                    >
-                        {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Log In"}
+                    <button onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setError(null); }} className="text-xs text-zinc-500 hover:text-white transition-colors">
+                        {authMode === 'login' ? "New Organization? Create Account" : "Already registered? Log In"}
                     </button>
                 </div>
             </div>
