@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { User, AppSettings, ReceiptData, ActionItem, ViewState, UserRole } from '../types';
-import { ShieldAlert, Server, Users, Activity, HardDrive, AlertTriangle, Search, Lock, Unlock, Database, TrendingUp, BarChart3, Layers, Download, RefreshCw, Key, CreditCard, Clock, Globe, Plus, Pencil, Trash2, CheckCircle2, MoreHorizontal, X, Save, Shield } from 'lucide-react';
+import { ShieldAlert, Server, Users, Activity, HardDrive, AlertTriangle, Search, Lock, Unlock, Database, TrendingUp, BarChart3, Layers, Download, RefreshCw, Key, CreditCard, Clock, Globe, Plus, Pencil, Trash2, CheckCircle2, MoreHorizontal, X, Save, Shield, Phone, Mail, Loader2, Send } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { storageService } from '../services/storageService';
 
@@ -27,6 +27,7 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
     const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'finance'>('overview');
     const [searchTerm, setSearchTerm] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
     
     // User Management State
     const [users, setUsers] = useState<User[]>([]);
@@ -37,31 +38,32 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
     const [formData, setFormData] = useState<Partial<User>>({
         name: '',
         email: '',
+        phoneNumber: '',
         role: 'User',
         password: '',
         allowedModules: MODULES_LIST.map(m => m.id), // Default all
         department: 'General'
     });
 
-    // Load users from storageService
+    // Load users from storageService (GCP Simulation)
     useEffect(() => {
         loadUsers();
     }, [currentUser]);
 
-    const loadUsers = () => {
-        const storedUsers = storageService.getSystemUsers();
-        // Ensure current user is in the list for the UI
-        const allUsers = storedUsers.length > 0 ? storedUsers : [currentUser];
+    const loadUsers = async () => {
+        setIsRefreshing(true);
+        const storedUsers = await storageService.getSystemUsers();
         
-        // Deduplicate based on email if mix of mock/real
+        // Ensure current user is in the list for the UI if local storage is empty initially
+        let allUsers = storedUsers;
+        if (storedUsers.length === 0 && currentUser.email) {
+             allUsers = [currentUser];
+        }
+        
+        // Deduplicate based on email
         const uniqueUsers = Array.from(new Map(allUsers.map(item => [item.email, item])).values());
         setUsers(uniqueUsers);
-    };
-
-    const handleRefresh = () => {
-        setIsRefreshing(true);
-        loadUsers();
-        setTimeout(() => setIsRefreshing(false), 800);
+        setIsRefreshing(false);
     };
 
     // User CRUD Operations
@@ -70,6 +72,7 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
         setFormData({
             name: '',
             email: '',
+            phoneNumber: '',
             role: 'User',
             password: '',
             allowedModules: MODULES_LIST.map(m => m.id),
@@ -88,35 +91,46 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
         setIsUserModalOpen(true);
     };
 
-    const handleDeleteUser = (userId: string) => {
+    const handleDeleteUser = async (userId: string) => {
         if (userId === currentUser.id) return alert("Cannot delete yourself.");
         if (confirm("Are you sure you want to delete this user? This cannot be undone.")) {
-            storageService.deleteSystemUser(userId);
+            await storageService.deleteSystemUser(userId);
             loadUsers();
         }
     };
 
-    const handleSaveUser = () => {
+    const handleSaveUser = async () => {
         if (!formData.name || !formData.email) return alert("Name and Email are required.");
+        setIsSaving(true);
         
-        const userToSave: User = {
-            ...editingUser,
-            id: editingUser?.id || crypto.randomUUID(),
-            name: formData.name,
-            email: formData.email,
-            role: formData.role as UserRole,
-            department: formData.department,
-            mfaVerified: formData.mfaVerified || false,
-            // Only update password if provided
-            ...(formData.password ? { password: formData.password } : {}),
-            // Default to previous password if editing and not provided, or empty if new (handled by logic)
-            allowedModules: formData.allowedModules,
-            lastActive: editingUser?.lastActive || new Date().toISOString()
-        };
+        try {
+            const userToSave: User = {
+                ...editingUser,
+                id: editingUser?.id || crypto.randomUUID(),
+                name: formData.name,
+                email: formData.email,
+                phoneNumber: formData.phoneNumber,
+                role: formData.role as UserRole,
+                department: formData.department,
+                mfaVerified: formData.mfaVerified || false,
+                // Only update password if provided
+                ...(formData.password ? { password: formData.password } : {}),
+                allowedModules: formData.allowedModules,
+                lastActive: editingUser?.lastActive || new Date().toISOString()
+            };
 
-        storageService.saveSystemUser(userToSave);
-        setIsUserModalOpen(false);
-        loadUsers();
+            await storageService.saveSystemUser(userToSave);
+            setIsUserModalOpen(false);
+            loadUsers();
+        } catch (e: any) {
+            alert(`Error saving user: ${e.message}`);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleSendInvite = (user: User) => {
+        alert(`Invitation sent to ${user.email} and ${user.phoneNumber || 'their phone'}.`);
     };
 
     const toggleModulePermission = (moduleId: ViewState) => {
@@ -169,9 +183,9 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                 <div className="flex gap-3">
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-full">
                         <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                        <span className="text-xs font-mono text-zinc-400">SYS_OP: NORMAL</span>
+                        <span className="text-xs font-mono text-zinc-400">GCP SYNC: ACTIVE</span>
                     </div>
-                    <button onClick={handleRefresh} className={`p-3 rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700 transition-all ${isRefreshing ? 'animate-spin' : ''}`}>
+                    <button onClick={() => loadUsers()} className={`p-3 rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700 transition-all ${isRefreshing ? 'animate-spin' : ''}`}>
                         <RefreshCw className="w-5 h-5" />
                     </button>
                 </div>
@@ -313,7 +327,7 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                     <tr>
                                         <th className="p-4 border-b border-zinc-800">User</th>
                                         <th className="p-4 border-b border-zinc-800">Role</th>
-                                        <th className="p-4 border-b border-zinc-800">Dept</th>
+                                        <th className="p-4 border-b border-zinc-800">Contact</th>
                                         <th className="p-4 border-b border-zinc-800">Access</th>
                                         <th className="p-4 border-b border-zinc-800 text-right">Actions</th>
                                     </tr>
@@ -323,15 +337,17 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                         <tr key={u.id || u.email} className="hover:bg-white/5 transition-colors">
                                             <td className="p-4">
                                                 <div className="flex items-center gap-3">
-                                                    <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-white border border-zinc-700">
+                                                    <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-white border border-zinc-700 relative">
                                                         {u.name.charAt(0)}
+                                                        {/* Status Dot */}
+                                                        {u.isEmailVerified && <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-zinc-900" title="Verified"/>}
                                                     </div>
                                                     <div>
                                                         <div className="text-white font-medium flex items-center gap-2">
                                                             {u.name} 
                                                             {u.id === currentUser.id && <span className="text-[10px] text-amber-500 bg-amber-500/10 px-1 rounded ml-1">(YOU)</span>}
                                                         </div>
-                                                        <div className="text-xs text-zinc-500">{u.email}</div>
+                                                        <div className="text-xs text-zinc-500">{u.department || 'General'}</div>
                                                     </div>
                                                 </div>
                                             </td>
@@ -343,7 +359,18 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                                     {u.role}
                                                 </span>
                                             </td>
-                                            <td className="p-4">{u.department || 'General'}</td>
+                                            <td className="p-4">
+                                                <div className="flex flex-col gap-1 text-xs">
+                                                    <div className="flex items-center gap-2 text-zinc-300">
+                                                        <Mail className="w-3 h-3 text-zinc-500"/> {u.email}
+                                                    </div>
+                                                    {u.phoneNumber && (
+                                                        <div className="flex items-center gap-2 text-zinc-400">
+                                                            <Phone className="w-3 h-3 text-zinc-500"/> {u.phoneNumber}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </td>
                                             <td className="p-4">
                                                 <div className="flex items-center gap-1">
                                                     <div className={`w-2 h-2 rounded-full ${u.allowedModules ? 'bg-indigo-500' : 'bg-emerald-500'}`} />
@@ -352,6 +379,9 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                             </td>
                                             <td className="p-4 text-right">
                                                 <div className="flex justify-end gap-2">
+                                                    <button onClick={() => handleSendInvite(u)} className="p-2 hover:bg-emerald-500/10 rounded-lg text-zinc-400 hover:text-emerald-400 transition-colors" title="Send Verify Email">
+                                                        <Send className="w-4 h-4" />
+                                                    </button>
                                                     <button onClick={() => handleEditUser(u)} className="p-2 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors" title="Edit User">
                                                         <Pencil className="w-4 h-4" />
                                                     </button>
@@ -411,6 +441,15 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
                                             onChange={e => setFormData({...formData, email: e.target.value})}
                                             className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-white focus:border-indigo-500 outline-none"
                                             placeholder="jane@company.com"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-zinc-400 block mb-1">Phone Number (For MFA)</label>
+                                        <input 
+                                            value={formData.phoneNumber}
+                                            onChange={e => setFormData({...formData, phoneNumber: e.target.value})}
+                                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-white focus:border-indigo-500 outline-none"
+                                            placeholder="+1 555 000 0000"
                                         />
                                     </div>
                                     <div>
@@ -480,8 +519,9 @@ export const AdminModule: React.FC<AdminModuleProps> = ({ currentUser, settings,
 
                         <div className="p-6 border-t border-zinc-800 bg-zinc-900 flex justify-end gap-3">
                             <button onClick={() => setIsUserModalOpen(false)} className="px-5 py-2.5 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors font-medium">Cancel</button>
-                            <button onClick={handleSaveUser} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/20 flex items-center gap-2">
-                                <Save className="w-4 h-4" /> Save User
+                            <button onClick={handleSaveUser} disabled={isSaving} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/20 flex items-center gap-2 disabled:opacity-50">
+                                {isSaving ? <Loader2 className="w-4 h-4 animate-spin"/> : <Save className="w-4 h-4" />}
+                                Save User
                             </button>
                         </div>
                     </div>

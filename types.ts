@@ -36,9 +36,14 @@ export interface ApiConfig {
 export interface User {
   id?: string; // UUID
   email: string;
+  phoneNumber?: string; // New
   name: string;
-  password?: string; // Only used in the Admin Directory for simulation
+  password?: string; // Hashed/Encrypted in storage
   mfaVerified: boolean;
+  isEmailVerified?: boolean; // New
+  isPhoneVerified?: boolean; // New
+  resetToken?: string; // New: For password reset
+  resetTokenExpiry?: number; // New
   storageProvider?: StorageProviderType;
   role?: UserRole;
   allowedModules?: ViewState[]; // Access Control List
